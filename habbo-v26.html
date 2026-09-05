@@ -1126,14 +1126,14 @@ function rotated(def, dir, st){
   return { parts, W, H };
 }
 function footprint(it){
-  if(it.cls) return realFoot(it);          /* meuble officiel : dims du furnidata */
+  if(it.cls) return bbFoot(it);          /* meuble officiel : dims du furnidata */
   const d = FURNI[it.id];
   return (it.dir & 1) ? { w:d.fh, h:d.fw } : { w:d.fw, h:d.fh };
 }
 /* métadonnées d'un meuble, quelle que soit son origine */
 function furniMeta(it){
   if(!it) return null;
-  return it.cls ? (RF.byClass[it.cls] || { name:it.cls }) : FURNI[it.id];
+  return it.cls ? (BB.byClass[it.cls] || { name:it.cls }) : FURNI[it.id];
 }
 function furniLabel(it){
   const m = furniMeta(it);
@@ -1244,11 +1244,11 @@ function gridOf(room, walkable){
   room.items.forEach(it=>{
     let f;
     if(it.cls){
-      const m = RF.byClass[it.cls];
+      const m = BB.byClass[it.cls];
       /* Pour se déplacer, on peut monter sur un siège ou un lit ; pour poser
          un meuble en revanche, la case compte comme occupée. */
       if(walkable && m && (m.sit || m.lay || m.stand)) return;
-      f = realFoot(it);
+      f = bbFoot(it);
     }else{
       const d = FURNI[it.id];
       if(!d || !d.solid) return;
@@ -1328,199 +1328,337 @@ function nearestFree(room, tx, ty, grid){
   return null;
 }
 /* ══════════════════════════════════════════════════════════
-   14. mobilier officiel Habbo
-   Les meubles réels ne sont pas dans le pack : on va les chercher
-   sur les serveurs de Habbo au démarrage.
-     · furnidata  → la liste officielle (nom, classe, révision,
-                    dimensions, « on peut s'y asseoir », catégorie)
-     · _icon.png  → l'illustration officielle du meuble
-   Les URL des CDN de Habbo changent au fil des années : plutôt que
-   d'en figer une, le client essaie plusieurs motifs et retient celui
-   qui répond. Si rien ne répond, on garde les meubles dessinés.
+   16. VRAIS MEUBLES HABBO
+   Portage du pipeline de bobba_client (Josedn, GPL) sur les
+   assets miroir de bobba.io. Un meuble Habbo n'est pas une
+   image : c'est un atlas + un descripteur de calques.
+     <base>furnidata.json            la liste des meubles
+     <base><nom>/furni.json          calques, offsets, atlas
+     <base><nom>/atlas.png           la planche de sprites
+   On recompose ensuite les calques : direction, état, image
+   d'animation, teinte de la variante de couleur, ombre portée.
    ══════════════════════════════════════════════════════════ */
-const RF = {
-  state:'idle',        // idle | loading | ok | fail
-  byClass:{},          // classname -> métadonnées
-  list:[],             // tous les meubles, triés par nom
-  cats:[],             // [[catégorie, nombre], …]
-  pattern:null,        // index du motif d'icône qui fonctionne
-  icons:new Map(),
-  count:0,
-  iconOk:0,            // combien d'icônes officielles ont pu être chargées
-  iconFail:0,
-  note:''
+const BOBBA_BASE = 'https://images.bobba.io/dcr/hof_furni/';
+
+const BB = {
+  state:'idle', note:'', count:0,
+  byClass:{}, list:[], cats:[],
+  bases:new Map(),      /* nom -> {st, offset, atlas, assets} */
+  comp:new Map(),       /* clé -> {cv, ox, oy}                */
+  compMax:260
 };
 
-/* la liste officielle des meubles ; plusieurs hôtels, au cas où */
-const FURNIDATA_URLS = [
-  'https://www.habbo.com/gamedata/furnidata_json/1',
-  'https://www.habbo.fr/gamedata/furnidata_json/1',
-  'https://www.habbo.es/gamedata/furnidata_json/1',
-  'https://www.habbo.de/gamedata/furnidata_json/1'
-];
-
-/* motifs d'URL d'icône connus, essayés dans l'ordre */
-const ICON_PATTERNS = [
-  (c,r)=>'https://images.habbo.com/dcr/hof_furni/'+r+'/'+c+'_icon.png',
-  (c,r)=>'https://images.habbo.com/dcr/hof_furni/'+c+'_icon.png',
-  (c,r)=>'https://swfs.habbo.com/dcr/hof_furni/'+r+'/'+c+'_icon.png',
-  (c,r)=>'https://images.habbo.com/dcr/hof_furni/icons/'+c+'_icon.png'
-];
-
-/* le nom de fichier remplace l'étoile des variantes de couleur */
-const iconName = cls => String(cls).replace(/\*/g,'_');
-
-/* Charge une image en essayant plusieurs URL, et pour chacune avec puis
-   sans CORS : l'affichage marche sans CORS, seul l'appareil photo en a
-   besoin. onDone(img, indexDuMotif) ou onDone(null,-1) si tout échoue. */
-function loadImageCascade(urls, onDone){
-  let i = 0;
-  const attempt = ()=>{
-    if(i >= urls.length){ onDone(null, -1); return; }
-    const url = urls[i];
-    const go = (cors)=>{
-      const im = new Image();
-      if(cors) im.crossOrigin = 'anonymous';
-      im.onload  = ()=>onDone(im, i);
-      im.onerror = ()=>{ if(cors) go(false); else { i++; attempt(); } };
-      im.src = url;
-    };
-    go(true);
-  };
-  attempt();
+/* "chair_basic*2" -> { name:"chair_basic", col:2 } */
+function bbSplit(cn){
+  const s = String(cn), i = s.indexOf('*');
+  return i < 0 ? { name:s, col:0 }
+               : { name:s.slice(0,i), col:parseInt(s.slice(i+1),10) || 0 };
 }
+const bbCat = cn => (String(cn).split(/[_*]/)[0] || 'divers').toLowerCase();
 
-/* icône officielle d'un meuble, chargée à la demande */
-function realIcon(cls){
-  let e = RF.icons.get(cls);
-  if(e) return e;
-  e = { img:null, ready:false, failed:false };
-  RF.icons.set(cls, e);
-  const meta = RF.byClass[cls] || {};
-  const file = iconName(cls);
-  /* si un motif a déjà fait ses preuves, on ne teste que celui-là */
-  const pats = RF.pattern == null ? ICON_PATTERNS : [ICON_PATTERNS[RF.pattern]];
-  const urls = pats.map(p=>p(file, meta.rev || 0));
-  loadImageCascade(urls, (im, idx)=>{
-    if(!im){
-      e.failed = true;
-      RF.iconFail++;
-      /* Aucune icône ne passe : le CDN a bougé ou le navigateur les bloque.
-         On le dit une fois, plutôt que de laisser des vignettes vides. */
-      if(RF.iconOk === 0 && RF.iconFail === 6){
-        RF.note = 'Liste officielle chargée, mais les images des meubles sont '
-                + 'inaccessibles depuis ce navigateur. Essaie « Meubles dessinés ».';
-        if(typeof onRealIconsFailed === 'function') onRealIconsFailed();
-      }
-      return;
-    }
-    e.img = im; e.ready = true;
-    RF.iconOk++;
-    if(RF.pattern == null && idx >= 0) RF.pattern = idx;
-  });
-  return e;
-}
-
-/* ---------- lecture du furnidata ---------- */
-function parseFurnidata(json){
-  const out = [];
-  const grab = section=>{
-    if(!section) return;
-    let arr = section.furnitype || section;
-    if(!Array.isArray(arr)) arr = [arr];
-    arr.forEach(f=>{
-      if(!f || !f.classname) return;
-      const xd = parseInt(f.xdim, 10), yd = parseInt(f.ydim, 10);
-      out.push({
+/* ---------- la liste des meubles ---------- */
+async function loadBobbaFurni(){
+  if(BB.state === 'loading' || BB.state === 'ok') return;
+  BB.state = 'loading';
+  try{
+    const r = await fetch(BOBBA_BASE + 'furnidata.json', { mode:'cors', cache:'default' });
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    const room = (j && j.roomitemtypes) || {};
+    const list = [];
+    for(const id in room){
+      const f = room[id];
+      if(!f || !f.classname) continue;
+      list.push({
         cls:  f.classname,
         name: f.name || f.classname,
         desc: f.description || '',
-        rev:  f.revision != null ? f.revision : 0,
-        xdim: xd > 0 ? xd : 1,
-        ydim: yd > 0 ? yd : 1,
-        cat:  f.category || 'divers',
-        sit:  !!f.cansiton,
-        lay:  !!f.canlayon,
-        stand:!!f.canstandon
+        xdim: parseInt(f.xdim,10) > 0 ? parseInt(f.xdim,10) : 1,
+        ydim: parseInt(f.ydim,10) > 0 ? parseInt(f.ydim,10) : 1,
+        sit:  !!parseInt(f.cansiton,10),
+        lay:  !!parseInt(f.canlayon,10),
+        stand:!!parseInt(f.canstandon,10),
+        cat:  bbCat(f.classname)
       });
-    });
-  };
-  grab(json && json.roomitemtypes);      /* seuls les meubles de sol */
+    }
+    if(!list.length) throw new Error('furnidata vide');
+    list.sort((a,b)=>a.name.localeCompare(b.name,'fr'));
+    const tally = {};
+    list.forEach(f=>{ BB.byClass[f.cls] = f; tally[f.cat] = (tally[f.cat]||0) + 1; });
+    BB.list  = list;
+    BB.count = list.length;
+    BB.cats  = Object.keys(tally).sort((a,b)=>tally[b]-tally[a]).map(c=>[c,tally[c]]);
+    BB.state = 'ok';
+    BB.note  = BB.count + ' meubles Habbo chargés depuis bobba.io.';
+  }catch(err){
+    BB.state = 'fail';
+    BB.note  = 'Meubles Habbo injoignables (' + (err && err.message ? err.message : 'réseau')
+             + '). Les meubles pixel prennent le relais.';
+  }
+  if(typeof onBobbaReady === 'function') onBobbaReady();
+}
+
+/* ---------- l'atlas et les calques d'un meuble ---------- */
+function bbImage(url){
+  return new Promise((res,rej)=>{
+    const go = cors=>{
+      const im = new Image();
+      if(cors) im.crossOrigin = 'anonymous';
+      im.onload  = ()=>res(im);
+      im.onerror = ()=>{ if(cors) go(false); else rej(new Error('img')); };
+      im.src = url;
+    };
+    go(true);
+  });
+}
+
+function bbGetBase(itemName){
+  let b = BB.bases.get(itemName);
+  if(b) return b;
+  b = { st:'load' };
+  BB.bases.set(itemName, b);
+  (async ()=>{
+    try{
+      const r = await fetch(BOBBA_BASE + itemName + '/furni.json', { mode:'cors', cache:'default' });
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      const off = await r.json();
+      const img = await bbImage(BOBBA_BASE + itemName + '/atlas.png');
+      const frames = (off.atlas && off.atlas.frames) || {};
+      const assets = {};
+      for(const id in (off.assets || {})){
+        const a = off.assets[id];
+        const src = a.source ? off.assets[a.source] : a;
+        if(!src || !src.exists) continue;
+        const fr = frames[src.name + '.png'];
+        if(!fr || !fr.frame) continue;
+        assets[a.name] = { f:fr.frame, x:+a.x || 0, y:+a.y || 0, flip:a.flipH === 1 };
+      }
+      b.offset = off; b.atlas = img; b.assets = assets; b.st = 'ok';
+    }catch(err){ b.st = 'fail'; }
+  })();
+  return b;
+}
+
+const bbLayerChar = i => i === -1 ? 'sd' : String.fromCharCode(97 + i);
+const bbResName = (n, size, i, d, f) =>
+  size === 1 ? n + '_icon_' + bbLayerChar(i)
+             : n + '_64_' + bbLayerChar(i) + '_' + d + '_' + f;
+
+function bbVis(b, size){
+  const v = b.offset && b.offset.visualization;
+  if(!v) return null;
+  return v[size] || v[String(size)] || null;
+}
+/* directions réellement fournies par le meuble */
+function bbDirs(b){
+  const v = bbVis(b, 64);
+  const d = v && v.directions ? Object.keys(v.directions).map(Number).sort((a,c)=>a-c) : [0];
+  return d.length ? d : [0];
+}
+/* nombre d'images d'animation d'un état */
+function bbFrameCount(b, state){
+  const v = bbVis(b, 64);
+  if(!v || !v.animations || !v.animations[state]) return 1;
+  let n = 1;
+  for(const L of (v.animations[state].layers || [])){
+    if(!L.frameSequence) continue;
+    let len = 0;
+    L.frameSequence.forEach(s=>{ len += s.length; });
+    if(len > n) n = len;
+  }
+  return n;
+}
+function bbStates(b){
+  const v = bbVis(b, 64);
+  if(!v || !v.animations) return [0];
+  const s = Object.keys(v.animations).map(Number).sort((a,c)=>a-c);
+  return s.length ? s : [0];
+}
+
+/* Reconstruit la pile de calques d'une image donnée.
+   Porté de FurniBase.getLayers de bobba_client. */
+function bbLayers(b, itemName, colorId, size, dir, state, frame){
+  const vis = bbVis(b, size);
+  if(!vis) return [];
+  const out = [];
+  const isIcon = size === 1;
+  for(let i = isIcon ? 0 : -1; i < vis.layerCount; i++){
+    const L = { id:i, frame:0, alpha:null, color:null, ink:null };
+    if(i === -1) L.alpha = 77;                       /* l'ombre portée */
+    if(vis.layers) for(const l of vis.layers) if(l.layerId === i){
+      if(l.ink != null)   L.ink = l.ink;
+      if(l.alpha != null) L.alpha = l.alpha;
+    }
+    if(vis.colors && vis.colors[colorId])
+      for(const c of vis.colors[colorId])
+        if(c.layerId === i && c.color != null) L.color = '#' + String(c.color).padStart(6,'0');
+    if(vis.animations && vis.animations[state])
+      for(const al of (vis.animations[state].layers || [])){
+        if(al.layerId !== i || !al.frameSequence) continue;
+        const seqs = al.frameSequence;
+        if(seqs.length === 1){
+          L.frame = seqs[0][frame % seqs[0].length];
+        }else{
+          let n = 0;
+          for(const s of seqs){
+            if(frame < s.length + n && frame > n){ L.frame = s[(frame - n - 1) % s.length]; break; }
+            n += s.length;
+          }
+        }
+      }
+    const a = b.assets[bbResName(itemName, size, i, dir, L.frame)];
+    if(a){ L.asset = a; out.push(L); }
+  }
   return out;
 }
 
-function adoptFurnidata(json){
-  const list = parseFurnidata(json);
-  if(!list.length) return false;
-  RF.list = list.sort((a,b)=>a.name.localeCompare(b.name, 'fr'));
-  RF.byClass = {};
-  const tally = {};
-  RF.list.forEach(f=>{
-    RF.byClass[f.cls] = f;
-    tally[f.cat] = (tally[f.cat] || 0) + 1;
-  });
-  RF.cats = Object.keys(tally).sort((a,b)=>tally[b] - tally[a]).map(c=>[c, tally[c]]);
-  RF.count = RF.list.length;
-  RF.state = 'ok';
-  return true;
+/* teinte sans lire les pixels : multiply puis restauration de l'alpha */
+function bbTint(src, color){
+  const c = document.createElement('canvas');
+  c.width = src.width; c.height = src.height;
+  const x = c.getContext('2d');
+  x.drawImage(src, 0, 0);
+  x.globalCompositeOperation = 'multiply';
+  x.fillStyle = color;
+  x.fillRect(0, 0, c.width, c.height);
+  x.globalCompositeOperation = 'destination-in';
+  x.drawImage(src, 0, 0);
+  return c;
 }
 
-async function loadRealFurni(){
-  if(RF.state === 'loading' || RF.state === 'ok') return;
-  RF.state = 'loading';
-  for(const url of FURNIDATA_URLS){
-    try{
-      const r = await fetch(url, { mode:'cors', credentials:'omit' });
-      if(!r.ok) continue;
-      const j = await r.json();
-      if(adoptFurnidata(j)){
-        RF.note = RF.count + ' meubles officiels chargés.';
-        if(typeof onRealFurniReady === 'function') onRealFurniReady();
-        return;
-      }
-    }catch(err){ /* hôtel suivant */ }
+/* Compose une image complète du meuble.
+   Renvoie { cv, ox, oy } : ox/oy = coin haut-gauche du canevas,
+   exprimé par rapport au point d'ancrage (= le centre de la case). */
+function bbCompose(itemName, colorId, size, dir, state, frame){
+  const key = itemName + '|' + colorId + '|' + size + '|' + dir + '|' + state + '|' + frame;
+  let out = BB.comp.get(key);
+  if(out !== undefined) return out;
+
+  const b = BB.bases.get(itemName);
+  if(!b || b.st !== 'ok') return null;
+  const layers = bbLayers(b, itemName, colorId, size, dir, state, frame);
+  if(!layers.length){ BB.comp.set(key, null); return null; }
+
+  /* boîte englobante, dans le repère de l'ancre */
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for(const L of layers){
+    const a = L.asset, w = a.f.w, h = a.f.h;
+    const px = a.flip ? (a.x - w) : (-a.x);
+    const py = -a.y;
+    if(px < x0) x0 = px;
+    if(py < y0) y0 = py;
+    if(px + w > x1) x1 = px + w;
+    if(py + h > y1) y1 = py + h;
   }
-  RF.state = 'fail';
-  RF.note = 'Liste officielle injoignable (réseau ou CORS). '
-          + 'Les meubles dessinés prennent le relais.';
-  if(typeof onRealFurniReady === 'function') onRealFurniReady();
+  const W = Math.max(1, Math.ceil(x1 - x0)), H = Math.max(1, Math.ceil(y1 - y0));
+  if(W > 900 || H > 900){ BB.comp.set(key, null); return null; }
+
+  const cv2 = document.createElement('canvas');
+  cv2.width = W; cv2.height = H;
+  const cx = cv2.getContext('2d');
+  cx.imageSmoothingEnabled = false;
+
+  for(const L of layers){
+    const a = L.asset, w = a.f.w, h = a.f.h;
+    /* on découpe l'asset dans l'atlas */
+    const piece = document.createElement('canvas');
+    piece.width = w; piece.height = h;
+    const pc = piece.getContext('2d');
+    pc.imageSmoothingEnabled = false;
+    if(a.flip){ pc.translate(w, 0); pc.scale(-1, 1); }
+    pc.drawImage(b.atlas, a.f.x, a.f.y, w, h, 0, 0, w, h);
+
+    let img = piece;
+    if(L.color) img = bbTint(piece, L.color);
+
+    cx.save();
+    cx.globalCompositeOperation = (L.ink === 'ADD') ? 'lighter' : 'source-over';
+    if(L.alpha != null) cx.globalAlpha = Math.max(0, Math.min(1, L.alpha / 255));
+    const px = a.flip ? (a.x - w) : (-a.x);
+    cx.drawImage(img, Math.round(px - x0), Math.round(-a.y - y0));
+    cx.restore();
+  }
+
+  out = { cv:cv2, ox:x0, oy:y0 };
+  if(BB.comp.size > BB.compMax) BB.comp.clear();
+  BB.comp.set(key, out);
+  return out;
 }
 
-/* ---------- rendu d'un meuble officiel ---------- */
-function realFoot(it){
-  const m = RF.byClass[it.cls];
+/* ---------- rendu dans la salle ---------- */
+function bbFoot(it){
+  const m = BB.byClass[it.cls];
   return { w:(m && m.xdim) || 1, h:(m && m.ydim) || 1 };
 }
 
-function drawRealFurni(gx, it, t){
+function drawBobbaFurni(gx, it, t){
   const k = cam.zoom;
-  const f = realFoot(it);
-  const c = iso(it.x + f.w/2, it.y + f.h/2);      /* centre de l'empreinte */
+  const { name, col } = bbSplit(it.cls);
+  const b = bbGetBase(name);
+  /* l'ancre d'un meuble Habbo est le centre de sa case d'origine */
+  const anchor = iso(it.x + .5, it.y + .5);
 
-  /* ombre au sol : c'est elle qui pose l'objet sur la case */
-  gx.save(); gx.globalAlpha = .22; gx.fillStyle = '#000';
-  gx.beginPath();
-  gx.ellipse(c.x, c.y, (f.w + f.h)*8.5*k, (f.w + f.h)*4.2*k, 0, 0, Math.PI*2);
-  gx.fill(); gx.restore();
-
-  const e = realIcon(it.cls);
-  if(e.ready && e.img.naturalWidth){
-    const w = e.img.naturalWidth*k, h = e.img.naturalHeight*k;
-    gx.imageSmoothingEnabled = false;
-    gx.drawImage(e.img, c.x - w/2, c.y - h + 3*k, w, h);
-  }else{
-    /* en attendant l'icône : une caisse neutre à la bonne empreinte */
-    const m = RF.byClass[it.cls];
-    drawVol(gx, it.x, it.y,
-            { x:.08, y:.08, w:f.w-.16, h:f.h-.16, z:0, zh:26 },
-            e.failed ? '#8a949c' : '#b8c3cb');
-    if(e.failed && m){
-      gx.fillStyle = '#33414c';
-      gx.font = 'bold '+Math.round(8*k)+'px Verdana, sans-serif';
-      gx.textAlign = 'center';
-      gx.fillText(m.name.slice(0,12), c.x, c.y - 30*k);
-    }
+  if(b.st !== 'ok'){
+    const f = bbFoot(it);
+    gx.save(); gx.globalAlpha = b.st === 'fail' ? .5 : .3;
+    drawVol(gx, it.x, it.y, { x:.1, y:.1, w:f.w-.2, h:f.h-.2, z:0, zh:24 },
+            b.st === 'fail' ? '#8a949c' : '#b8c3cb');
+    gx.restore();
+    return;
   }
+
+  const dirs  = bbDirs(b);
+  const dir   = dirs[(it.dir || 0) % dirs.length];
+  const sts   = bbStates(b);
+  const state = sts[(it.st || 0) % sts.length];
+  const n     = bbFrameCount(b, state);
+  const frame = n > 1 ? Math.floor(t / 110) % n : 0;
+
+  const c = bbCompose(name, col, 64, dir, state, frame);
+  if(!c) return;
+  gx.imageSmoothingEnabled = false;
+  gx.drawImage(c.cv, anchor.x + c.ox*k, anchor.y + c.oy*k, c.cv.width*k, c.cv.height*k);
+}
+
+/* vignette : l'icône officielle du meuble */
+function bbThumb(cvs, cls, tries){
+  const c2 = cvs.getContext('2d');
+  c2.setTransform(1,0,0,1,0,0);
+  c2.clearRect(0,0,cvs.width,cvs.height);
+  const { name, col } = bbSplit(cls);
+  const b = bbGetBase(name);
+  if(b.st === 'load'){
+    if((tries||0) < 60) setTimeout(()=>bbThumb(cvs, cls, (tries||0)+1), 220);
+    return;
+  }
+  if(b.st === 'fail'){
+    c2.fillStyle = '#9fb3bf'; c2.font = 'bold 15px Verdana, sans-serif';
+    c2.textAlign = 'center'; c2.fillText('?', cvs.width/2, cvs.height/2+6);
+    return;
+  }
+  /* l'icône, sinon la vue de face */
+  let c = bbCompose(name, col, 1, 0, 0, 0);
+  if(!c){
+    const dirs = bbDirs(b);
+    c = bbCompose(name, col, 64, dirs[0], bbStates(b)[0], 0);
+  }
+  if(!c) return;
+  const s = Math.min(cvs.width*.94/c.cv.width, cvs.height*.94/c.cv.height, 1);
+  const w = Math.round(c.cv.width*s), h = Math.round(c.cv.height*s);
+  c2.imageSmoothingEnabled = false;
+  c2.drawImage(c.cv, Math.round((cvs.width-w)/2), Math.round((cvs.height-h)/2), w, h);
+}
+
+/* un meuble Habbo à plusieurs états se commute au clic */
+function bbMultistate(it){
+  const { name } = bbSplit(it.cls);
+  const b = BB.bases.get(name);
+  if(!b || b.st !== 'ok') return false;
+  const sts = bbStates(b);
+  if(sts.length < 2) return false;
+  it.st = ((it.st || 0) + 1) % sts.length;
+  save();
+  return true;
 }
 /* ══════════════════════════════════════════════════════════
    8. rendu de la salle
@@ -1651,7 +1789,7 @@ function leafCluster(gx, cx, cy, base, size, col, t){
 
 /* ---------- un meuble ---------- */
 function drawFurni(gx, it, t){
-  if(it.cls){ drawRealFurni(gx, it, t); return; }   /* meuble officiel Habbo */
+  if(it.cls){ drawBobbaFurni(gx, it, t); return; }  /* vrai meuble Habbo */
   drawPixelFurni(gx, it, t);                        /* sprite pixel art cuit */
 }
 
@@ -2465,7 +2603,13 @@ function useTeleport(c, it){
 function interact(c, it){
   if(!it) return false;
   const d = FURNI[it.id];
-  if(!d) return useFurni(c, it);          /* meuble officiel : selon le furnidata */
+  if(!d){
+    /* meuble Habbo : assise et coucher viennent du furnidata,
+       et les meubles à plusieurs états se commutent au clic */
+    const m = BB.byClass[it.cls];
+    if(m && (m.sit || m.lay)) return useFurni(c, it);
+    return bbMultistate(it);
+  }
   switch(d.use){
     case 'sit': case 'lay': return useFurni(c, it);
     case 'dice':     return rollDice(c, it);
@@ -2746,29 +2890,9 @@ function furniThumb(cvs, id, col){
   c2.drawImage(s.cv, Math.round((cvs.width-w)/2), Math.round((cvs.height-h)/2), w, h);
 }
 
-/* vignette d'un meuble officiel : l'icône Habbo, dessinée dans la case */
-const THUMB_TRIES = 45;
-function realThumb(cvs, cls, tries){
-  const c2 = cvs.getContext('2d');
-  c2.setTransform(1,0,0,1,0,0);
-  c2.clearRect(0,0,cvs.width,cvs.height);
-  const e = realIcon(cls);
-  if(e.ready && e.img.naturalWidth){
-    const s = Math.min(cvs.width*.94/e.img.naturalWidth,
-                       cvs.height*.94/e.img.naturalHeight, 1.6);
-    const w = e.img.naturalWidth*s, h = e.img.naturalHeight*s;
-    c2.imageSmoothingEnabled = false;
-    c2.drawImage(e.img, (cvs.width-w)/2, (cvs.height-h)/2, w, h);
-  }else if(!e.failed && (tries || 0) < THUMB_TRIES){
-    setTimeout(()=>realThumb(cvs, cls, (tries||0)+1), 230);
-  }else{
-    c2.fillStyle = '#9fb3bf'; c2.font = 'bold 15px Verdana, sans-serif';
-    c2.textAlign = 'center'; c2.fillText('?', cvs.width/2, cvs.height/2+6);
-  }
-}
-/* dessine n'importe quel meuble, officiel ou pixel */
+/* dessine n'importe quel meuble, Habbo ou pixel */
 function anyThumb(cvs, item){
-  if(item.cls) realThumb(cvs, item.cls, 0);
+  if(item.cls) bbThumb(cvs, item.cls, 0);
   else furniThumb(cvs, item.id, item.col);
 }
 
@@ -2810,17 +2934,12 @@ const REAL_PRICE = 10;
 const REAL_MAX = 240;          /* on n'affiche pas 12 000 vignettes d'un coup */
 
 /* appelé quand le furnidata a répondu (ou définitivement échoué) */
-function onRealFurniReady(){
-  /* le catalogue pixel reste la source par défaut : il marche toujours */
-  if(RF.state !== 'ok' && CAT.src === 'real') CAT.src = 'draw';
+function onBobbaReady(){
+  /* si les vrais meubles Habbo répondent, ils deviennent la source affichée */
+  if(BB.state === 'ok' && !CAT.touched) CAT.src = 'real';
+  if(BB.state !== 'ok' && CAT.src === 'real') CAT.src = 'draw';
   if(document.getElementById('wCat').classList.contains('open')) renderCatalogue();
   else updateCatStatus();
-}
-function onRealIconsFailed(){
-  updateCatStatus();
-  const el = document.getElementById('catStatus');
-  if(el) el.className = 'bad';
-  note('Images des meubles Habbo inaccessibles.','bad');
 }
 function updateCatStatus(){
   const el = document.getElementById('catStatus');
@@ -2831,15 +2950,14 @@ function updateCatStatus(){
                    + FURNI_TINTS.length + ' teintes chacun · aucun téléchargement.';
     return;
   }
-  const bad = RF.state === 'fail' || (RF.iconOk === 0 && RF.iconFail >= 6);
-  el.className = bad ? 'bad' : (RF.state === 'ok' ? 'good' : '');
-  el.textContent = RF.state === 'loading' ? 'Recherche des meubles officiels…' : RF.note;
+  el.className = BB.state === 'fail' ? 'bad' : (BB.state === 'ok' ? 'good' : '');
+  el.textContent = BB.state === 'loading' ? 'Chargement des meubles Habbo…' : BB.note;
 }
 
 /* liste des meubles officiels correspondant au filtre courant */
 function realMatches(){
   const q = CAT.q.trim().toLowerCase();
-  let arr = RF.list;
+  let arr = BB.list;
   if(CAT.rcat !== '*') arr = arr.filter(f=>f.cat === CAT.rcat);
   if(q) arr = arr.filter(f=>f.name.toLowerCase().indexOf(q) >= 0
                          || f.cls.toLowerCase().indexOf(q) >= 0);
@@ -2854,7 +2972,7 @@ function renderCatalogue(){
   /* colonne des catégories */
   const nav = $('#catNav');
   if(CAT.src === 'real'){
-    const cats = [['*','Tout le catalogue']].concat(RF.cats.slice(0,18).map(c=>[c[0], c[0]+' ('+c[1]+')']));
+    const cats = [['*','Tout le catalogue']].concat(BB.cats.slice(0,22).map(c=>[c[0], c[0]+' ('+c[1]+')']));
     nav.innerHTML = cats.map(c=>'<button data-rc="'+esc(c[0])+'"'
       + (c[0] === CAT.rcat ? ' class="on"' : '') + '>' + esc(c[1]) + '</button>').join('');
     $$('#catNav button').forEach(b=>{
@@ -2876,7 +2994,7 @@ function renderCatalogue(){
     es.forEach(en=>{
       if(!en.isIntersecting) return;
       const c = en.target.querySelector('canvas[data-cls]');
-      if(c){ realThumb(c, c.dataset.cls, 0); c.removeAttribute('data-cls'); }
+      if(c){ bbThumb(c, c.dataset.cls, 0); c.removeAttribute('data-cls'); }
       CAT.obs.unobserve(en.target);
     });
   }, { root:grid, rootMargin:'220px' });
@@ -2891,11 +3009,11 @@ function renderCatalogue(){
   };
 
   if(CAT.src === 'real'){
-    if(RF.state === 'loading'){
+    if(BB.state === 'loading'){
       grid.innerHTML = '<p class="hint" style="grid-column:1/-1">Chargement du catalogue Habbo…</p>';
-    }else if(RF.state !== 'ok'){
+    }else if(BB.state !== 'ok'){
       grid.innerHTML = '<p class="hint" style="grid-column:1/-1">'
-        + esc(RF.note) + '<br><br>Bascule sur « Meubles dessinés ».</p>';
+        + esc(BB.note) + '<br><br>Bascule sur « Meubles pixel ».</p>';
     }else{
       const arr = realMatches();
       arr.slice(0, REAL_MAX).forEach(f=>{
@@ -2933,11 +3051,11 @@ function renderCatalogue(){
   if(!CAT.sel){
     $('#catName').textContent = 'Choisis un article';
     $('#catDesc').textContent = CAT.src === 'real'
-      ? 'Catalogue officiel Habbo (selon ton réseau).' : 'Sprites pixel art cuits par le client.';
+      ? 'Le vrai catalogue Habbo.' : 'Sprites pixel art cuits par le client.';
     buy.disabled = true;
   }else if(CAT.sel.startsWith('real:')){
-    const f = RF.byClass[CAT.sel.slice(5)];
-    realThumb(prev, f.cls, 0);
+    const f = BB.byClass[CAT.sel.slice(5)];
+    bbThumb(prev, f.cls, 0);
     $('#catName').textContent = f.name;
     $('#catDesc').textContent = '🪙 ' + REAL_PRICE + ' crédits · ' + f.xdim + '×' + f.ydim + ' case(s)'
       + (f.sit ? ' · on peut s’y asseoir' : '') + (f.lay ? ' · on peut s’y allonger' : '');
@@ -2973,7 +3091,7 @@ function renderCatalogue(){
 function doBuy(){
   if(!CAT.sel) return;
   if(CAT.sel.startsWith('real:')){
-    const f = RF.byClass[CAT.sel.slice(5)];
+    const f = BB.byClass[CAT.sel.slice(5)];
     if(G.cred < REAL_PRICE){ note('Pas assez de crédits.','bad'); return; }
     G.cred -= REAL_PRICE;
     addInv({ cls:f.cls });
@@ -3042,7 +3160,7 @@ function renderInventory(){
   }
 }
 function invLabel(i){
-  if(i.cls){ const m = RF.byClass[i.cls]; return (m && m.name) || i.cls; }
+  if(i.cls){ const m = BB.byClass[i.cls]; return (m && m.name) || i.cls; }
   return FURNI[i.id] ? FURNI[i.id].n : i.id;
 }
 function startPlacing(){
@@ -3363,7 +3481,7 @@ $('#zOut').onclick  = ()=>{ cam.zoom = snapZoom(cam.zoom - .125); centerCam(); }
 $('#zRst').onclick  = ()=>{ cam.zoom = 1; centerCam(); };
 $('#catBuy').onclick   = doBuy;
 $$('.catTop .tab').forEach(b=>{
-  b.onclick = ()=>{ CAT.src = b.dataset.src; CAT.sel = null; renderCatalogue(); };
+  b.onclick = ()=>{ CAT.src = b.dataset.src; CAT.sel = null; CAT.touched = true; renderCatalogue(); };
 });
 $('#catSearch').oninput = e=>{ CAT.q = e.target.value; renderCatalogue(); };
 $('#invPlace').onclick = startPlacing;
@@ -3456,7 +3574,7 @@ function startClient(){
 
 /* ---------- séquence de chargement ---------- */
 (function boot(){
-  loadRealFurni();                       /* les vrais meubles, en tâche de fond */
+  loadBobbaFurni();                      /* les vrais meubles Habbo, en tâche de fond */
   const steps = [
     [12,'Chargement des données de figures…'],
     [34,'Préparation du mobilier…'],

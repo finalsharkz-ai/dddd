@@ -9,7 +9,8 @@ Aucune dépendance, aucun build — il suffit d'ouvrir le fichier dans un naviga
 |---|---|
 | Avatars | API d'imagerie **officielle Habbo** (`habbo-imaging/avatarimage`) |
 | Garde-robe | `figuredata` officiel : 13 types, 1068 jeux de vêtements |
-| Meubles | **Sprites pixel art** cuits par le client (43 meubles, 4 orientations) |
+| Meubles | **Vrais meubles Habbo** via `images.bobba.io` (pipeline bobba_client) |
+| Meubles (repli) | **Sprites pixel art** cuits par le client (43 meubles, 4 orientations) |
 | Salle et murs | Dessinés à la volée en isométrique (canvas) |
 | Mascottes | Sprites du pack fourni (atlas AVIF intégré au HTML) |
 
@@ -41,13 +42,42 @@ Cliquer un meuble déclenche sa fonction, comme dans Habbo :
 | Trophée | on **lit l'inscription** |
 | Piste de danse, cheminée, torche, fontaine | animées en continu |
 
-### Meubles officiels Habbo (optionnel)
+### Les vrais meubles Habbo
 
-Un second onglet du catalogue tente de charger le **furnidata officiel** de
-Habbo et ses icônes. Ça dépend entièrement du réseau et des en-têtes CORS du
-CDN de Habbo : le client essaie plusieurs motifs d'URL, retient celui qui
-répond, et dit franchement ce qu'il a obtenu. En cas d'échec, rien ne casse —
-les meubles pixel restent la source par défaut.
+Le premier onglet du catalogue charge les **véritables meubles Habbo**. Un
+meuble Habbo n'est pas une image : c'est un atlas de sprites plus un
+descripteur de calques. Le pipeline est porté de
+[bobba_client](https://github.com/Josedn/bobba_client) (Josedn, GPL) et lit les
+assets miroir de `images.bobba.io` :
+
+```
+<base>furnidata.json      la liste : nom, dimensions, cansiton / canlayon
+<base><nom>/furni.json    calques, offsets, atlas, animations, couleurs
+<base><nom>/atlas.png     la planche de sprites
+```
+
+Le client recompose ensuite chaque image : découpe des assets dans l'atlas,
+empilement des calques dans l'ordre, ombre portée, orientation, image
+d'animation, et teinte de la variante de couleur (`chair_basic*2`). L'ancrage
+tombe sur le centre de la case, comme dans Habbo.
+
+Ce que ça apporte : les vraies dimensions au sol, les vrais sièges et lits
+(d'après `cansiton` / `canlayon`), les meubles animés, et les meubles à
+plusieurs états qui **se commutent au clic**.
+
+Si `images.bobba.io` ne répond pas, le catalogue bascule sur les meubles pixel
+et le dit — rien ne casse.
+
+> Note : bobba_client est sous GPL. Le pipeline de rendu en est un portage,
+> ce qui place ce fichier sous la même licence si tu le redistribues.
+
+### Et les avatars ?
+
+Ils viennent de l'**API d'imagerie officielle de Habbo**
+(`habbo.com/habbo-imaging/avatarimage`) — c'est exactement la source
+qu'utilise bobba_client lui aussi. Il n'existe pas, dans bobba, de service
+d'images d'avatars de remplacement : son rendu en salle reconstruit l'avatar
+à partir des planches `gordon`, ce qui est un projet à part entière.
 
 ## Fidélité au client Habbo
 
