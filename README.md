@@ -9,37 +9,45 @@ Aucune dépendance, aucun build — il suffit d'ouvrir le fichier dans un naviga
 |---|---|
 | Avatars | API d'imagerie **officielle Habbo** (`habbo-imaging/avatarimage`) |
 | Garde-robe | `figuredata` officiel : 13 types, 1068 jeux de vêtements |
-| Meubles | **Catalogue officiel Habbo** (`furnidata` + icônes `images.habbo.com`) |
+| Meubles | **Sprites pixel art** cuits par le client (43 meubles, 4 orientations) |
 | Salle et murs | Dessinés à la volée en isométrique (canvas) |
 | Mascottes | Sprites du pack fourni (atlas AVIF intégré au HTML) |
 
-## Les vrais meubles Habbo
+## Les meubles
 
-Au démarrage, le client va chercher le **furnidata officiel** de Habbo. Il en
-tire la liste réelle des meubles : nom, classe, révision, dimensions au sol,
-catégorie, et les indicateurs « on peut s'y asseoir / s'y allonger ». Les
-illustrations viennent ensuite des icônes officielles servies par le CDN de
-Habbo.
+Les meubles sont des **sprites pixel art cuits par le client** : chaque meuble
+est rastérisé une fois dans un tampon de pixels, sans anticrénelage, avec un
+contour d'1 px, une palette réduite de 5 tons et des plateaux ronds obtenus par
+projection isométrique d'un cercle. Ils sont ensuite affichés au plus proche
+voisin, et le zoom avance par huitièmes pour que le pixel reste net.
 
-Les adresses des CDN de Habbo ont changé plusieurs fois au fil des années.
-Plutôt que d'en figer une, le client **essaie plusieurs motifs d'URL** et
-retient celui qui répond ; il tente chacun d'abord avec CORS (nécessaire à
-l'appareil photo), puis sans. Le catalogue indique en clair ce qui a été
-chargé.
+Rien n'est téléchargé : aucun CDN, aucun CORS, aucune image manquante.
+43 meubles, 10 teintes chacun, 4 orientations.
 
-Trois cas, tous gérés :
+### Leurs fonctions
 
-1. **Tout répond** — le catalogue affiche les milliers de meubles officiels,
-   avec recherche et catégories réelles.
-2. **La liste passe, pas les images** — le client le signale et propose de
-   basculer sur les meubles dessinés.
-3. **Rien ne passe** (réseau coupé, CORS refusé) — bascule automatique sur les
-   meubles dessinés, sans rien casser.
+Cliquer un meuble déclenche sa fonction, comme dans Habbo :
 
-L'onglet **« Meubles dessinés »** reste disponible à tout moment : ces meubles
-sont générés en volumes isométriques par le client, s'orientent sur 4 côtés et
-se teintent. Les meubles officiels, eux, n'ont qu'une seule vue (l'icône) et ne
-tournent donc pas.
+| Meuble | Au clic |
+|---|---|
+| Chaises, canapés, tabourets, trône | on marche jusqu'à lui et on **s'assoit**, face au bon côté |
+| Lits | on **s'allonge** |
+| Dé Habbo | il **roule** puis affiche sa face (1 à 6) ; second clic, il se referme |
+| Téléporteur | on entre, on **disparaît**, on ressort par le téléporteur jumeau |
+| Barrière | elle **s'ouvre et se ferme** — fermée, elle bloque vraiment le passage |
+| Lampadaire, néon, télé, borne, juke-box, boule disco | **interrupteur** on / off, la lumière suit |
+| Distributeur | on s'en approche et on **se sert à boire** |
+| Coffre, cadeau | le couvercle **s'ouvre** |
+| Trophée | on **lit l'inscription** |
+| Piste de danse, cheminée, torche, fontaine | animées en continu |
+
+### Meubles officiels Habbo (optionnel)
+
+Un second onglet du catalogue tente de charger le **furnidata officiel** de
+Habbo et ses icônes. Ça dépend entièrement du réseau et des en-têtes CORS du
+CDN de Habbo : le client essaie plusieurs motifs d'URL, retient celui qui
+répond, et dit franchement ce qu'il a obtenu. En cas d'échec, rien ne casse —
+les meubles pixel restent la source par défaut.
 
 ## Fidélité au client Habbo
 
@@ -49,8 +57,7 @@ tournent donc pas.
 - Déplacement au clic avec **cheminement A\*** qui contourne les meubles
   et ne coupe pas les angles.
 - On **s'assoit** sur une chaise et on **s'allonge** sur un lit en cliquant dessus.
-- Meubles **orientables sur 4 côtés** (meubles dessinés) : les volumes tournent
-  réellement ; les meubles officiels utilisent leurs vraies dimensions au sol.
+- Meubles **orientables sur 4 côtés** : les volumes tournent réellement.
 - **Bulles de chat** ancrées au-dessus de la tête, avec la vignette du visage,
   qui remontent à chaque nouveau message.
 - Les Habbos **tournent la tête** vers celui qui parle.
