@@ -490,7 +490,7 @@ img{image-rendering:pixelated;-ms-interpolation-mode:nearest-neighbor}
           <div class="swatchRow" id="rsWall"></div>
         </div>
         <button class="btn sm wide" id="rsPick">🧹 Ranger tous les meubles</button>
-        <p class="hint">Clic droit sur un meuble : le tourner. Maj + clic : le ramasser.</p>
+        <p class="hint">Glisse un meuble pour le déplacer · clic droit ou R pour le tourner · Maj + clic pour le ramasser.</p>
       </div>
     </div>
 
@@ -510,8 +510,13 @@ img{image-rendering:pixelated;-ms-interpolation-mode:nearest-neighbor}
         <p class="hint">Clique une case pour marcher (l'Habbo contourne les meubles).
         Clique une chaise ou un lit pour t'y asseoir / t'y allonger.</p>
         <b>Meubles</b>
-        <p class="hint">Achète au catalogue, puis pose depuis l'inventaire.
-        Clic droit = tourner · Maj + clic = ramasser.</p>
+        <p class="hint">Achète au catalogue, puis pose depuis l'inventaire.<br>
+        <b>Glisse un meuble</b> pour le déplacer : il suit le curseur et les
+        cases visées s'allument en vert ou en rouge.<br>
+        <b>Clic droit</b> (ou touche <code>R</code>) = tourner, même en plein
+        déplacement · <b>Échap</b> = annuler · <b>Maj + clic</b> = ramasser.<br>
+        Un simple clic, lui, <i>utilise</i> le meuble : s'asseoir, s'allonger,
+        allumer.</p>
         <b>Commandes de chat</b>
         <p class="hint">
         <code>:assis</code> <code>:debout</code> <code>:danse</code> <code>:salut</code>
@@ -521,7 +526,7 @@ img{image-rendering:pixelated;-ms-interpolation-mode:nearest-neighbor}
         </p>
         <b>Raccourcis</b>
         <p class="hint">Entrée : parler · Échap : fermer les fenêtres ·
-        Molette : zoom · Flèches : tourner sur place.</p>
+        Molette : zoom · Flèches : tourner sur place · R : tourner un meuble.</p>
       </div>
     </div>
 
@@ -622,19 +627,12 @@ function dirFromDelta(dx,dy){
 }
 
 /* ---------- 3. avatars ----------
-   Le service d'images d'avatars n'est pas figé : bobba, Habbo et ses
-   hôtels nationaux exposent tous la même signature (figure, direction,
-   head_direction, action, gesture, size, headonly). On essaie donc la
-   liste dans l'ordre au démarrage et on retient le premier qui répond ;
-   l'utilisateur peut aussi en imposer un depuis les réglages. */
-const AVATAR_ENDPOINTS = [
-  'https://images.bobba.io/avatarimage.php',
-  'https://www.habbo.com/habbo-imaging/avatarimage',
-  'https://www.habbo.fr/habbo-imaging/avatarimage',
-  'https://www.habbo.es/habbo-imaging/avatarimage',
-  'https://www.habbo.com.br/habbo-imaging/avatarimage',
-  'https://www.habbo.de/habbo-imaging/avatarimage'
-];
+   Les Habbos sont dessinés par le service d'images de bobba.io. On le
+   sonde au démarrage : s'il répond, tout passe par lui ; sinon le
+   moteur de secours interne prend la main. Une autre adresse peut être
+   imposée depuis le profil (même signature : figure, direction,
+   head_direction, action, gesture, size, headonly). */
+const AVATAR_ENDPOINTS = ['https://images.bobba.io/avatarimage.php'];
 const AV = { ep:null, probing:false, custom:null };
 function avatarBase(){
   return AV.custom || AVATAR_ENDPOINTS[AV.ep == null ? 0 : AV.ep];
@@ -1119,14 +1117,17 @@ function buildRoomItems(def){
 }
 
 /* ══════════ 7. cheminement (A*) ══════════ */
-function gridOf(room, walkable){
+function gridOf(room, walkable, ignore){
   const g = [];
   for(let y=0;y<room.h;y++){ g.push(new Array(room.w).fill(0)); }
   room.items.forEach(it=>{
+    if(ignore && it === ignore) return;      /* le meuble qu'on déplace */
     const m = BB.byClass[it.cls];
-    /* Pour marcher, on peut monter sur un siège, un lit ou un socle ;
-       pour poser un meuble, la case compte comme occupée. */
+    /* Pour marcher, on peut monter sur un siège, un lit ou un socle. */
     if(walkable && m && (m.sit || m.lay || m.stand)) return;
+    /* Un revêtement de sol (tapis, dalle de piste, bassin) ne bloque pas
+       la pose : dans Habbo on meuble par-dessus. */
+    if(!walkable && bbIsFlat(it.cls)) return;
     const f = bbFoot(it);
     for(let y=it.y; y<it.y+f.h; y++)
       for(let x=it.x; x<it.x+f.w; x++)
@@ -1135,7 +1136,7 @@ function gridOf(room, walkable){
   return g;
 }
 const blockedGrid  = room => gridOf(room, true);
-const occupiedGrid = room => gridOf(room, false);
+const occupiedGrid = (room, ignore) => gridOf(room, false, ignore);
 
 /* Renvoie la suite de cases à parcourir, ou null s'il n'y a pas de chemin.
    Les diagonales ne passent pas dans les angles, comme dans Habbo. */
@@ -1455,9 +1456,29 @@ function bbCompose(itemName, colorId, size, dir, state, frame){
 }
 
 /* ---------- rendu dans la salle ---------- */
+/* xdim / ydim décrivent le meuble face nord ; tourné d'un quart de
+   tour, il occupe la case dans l'autre sens. */
 function bbFoot(it){
   const m = BB.byClass[it.cls];
-  return { w:(m && m.xdim) || 1, h:(m && m.ydim) || 1 };
+  const w = (m && m.xdim) || 1, h = (m && m.ydim) || 1;
+  return ((it.dir || 0) & 1) ? { w:h, h:w } : { w, h };
+}
+/* Revêtement de sol ? On ne le devine pas d'après canstandon (les
+   tables aussi le portent) mais d'après la hauteur réelle donnée par
+   furni.json. Tant que la fiche n'est pas chargée, on reste prudent. */
+function bbIsFlat(cls){
+  const b = BB.bases.get(bbSplit(cls).name);
+  if(!b || b.st !== 'ok') return false;
+  const d = b.offset && b.offset.logic && b.offset.logic.dimensions;
+  return !!d && (+d.z || 0) <= 0.1;
+}
+
+/* combien d'orientations ce meuble propose-t-il vraiment ? */
+function bbDirCount(cls){
+  const b = BB.bases.get(bbSplit(cls).name);
+  if(!b || b.st !== 'ok') return 4;
+  const n = bbDirs(b).length;
+  return n > 0 ? n : 1;
 }
 
 function drawBobbaFurni(gx, it, t){
@@ -1848,8 +1869,18 @@ function drawScene(t){
   drawWalls(room);
   drawPixelFloor(room);
 
+  /* cases visées par le meuble qu'on déplace */
+  if(DRAG.it && DRAG.moved){
+    const f = footprint(DRAG.it);
+    const fill = DRAG.ok ? 'rgba(120,220,90,.30)' : 'rgba(230,90,70,.34)';
+    const line = DRAG.ok ? 'rgba(150,255,120,.9)' : 'rgba(255,130,110,.9)';
+    for(let y = DRAG.it.y; y < DRAG.it.y + f.h; y++)
+      for(let x = DRAG.it.x; x < DRAG.it.x + f.w; x++)
+        quad(g,[iso(x,y,1), iso(x+1,y,1), iso(x+1,y+1,1), iso(x,y+1,1)], fill, line);
+  }
+
   /* case survolée */
-  if(G.hover && !G.placing){
+  if(G.hover && !G.placing && !(DRAG.it && DRAG.moved)){
     const h = G.hover;
     quad(g,[iso(h.x,h.y,1), iso(h.x+1,h.y,1), iso(h.x+1,h.y+1,1), iso(h.x,h.y+1,1)],
          'rgba(255,255,255,.20)', 'rgba(255,255,255,.75)');
@@ -2699,7 +2730,7 @@ function startPlacing(){
   if(!it) return;
   G.placing = { key:it.key, cls:it.cls, dir:0 };
   closeWin('wInv');
-  note('Clique une case pour poser · clic droit : tourner · Échap : annuler');
+  note('Clique une case pour poser · clic droit ou R : tourner · Échap : annuler');
 }
 function placeHere(tx, ty){
   const p = G.placing;
@@ -2909,21 +2940,131 @@ function updatePurse(){
 /* ══════════════════════════════════════════════════════════
    11. entrées clavier / souris
    ══════════════════════════════════════════════════════════ */
-function tileFromEvent(e){
+function pointOf(e){
+  const t = e.touches && e.touches.length ? e.touches[0]
+          : (e.changedTouches && e.changedTouches.length ? e.changedTouches[0] : e);
+  return { x:t.clientX, y:t.clientY };
+}
+function tileFromPoint(pt){
   const r = cv.getBoundingClientRect();
-  const p = unIso(e.clientX - r.left, e.clientY - r.top);
+  const p = unIso(pt.x - r.left, pt.y - r.top);
   return { x:Math.floor(p.x), y:Math.floor(p.y) };
 }
+function tileFromEvent(e){ return tileFromPoint(pointOf(e)); }
 function inRoom(t){ return t.x >= 0 && t.y >= 0 && t.x < G.room.w && t.y < G.room.h; }
+
+/* ══════════════════════════════════════════════════════════
+   Déplacer et tourner un meuble à la souris, comme dans Habbo.
+   Un simple clic utilise le meuble (s'asseoir, commuter) ; c'est le
+   glissé qui le déplace. Le meuble suit vraiment le curseur, les
+   cases visées s'allument en vert ou en rouge, et le clic droit
+   le fait pivoter en cours de déplacement.
+   ══════════════════════════════════════════════════════════ */
+const DRAG = { it:null, moved:false, ok:true, from:null, sx:0, sy:0,
+               grab:{dx:0,dy:0}, swallow:false };
+
+function canPlaceAt(it, tx, ty){
+  const f = footprint(it);
+  if(tx < 0 || ty < 0 || tx + f.w > G.room.w || ty + f.h > G.room.h) return false;
+  const g = occupiedGrid(G.room, it);
+  for(let y = ty; y < ty + f.h; y++)
+    for(let x = tx; x < tx + f.w; x++)
+      if(g[y][x]) return false;
+  return true;
+}
+
+function dragStart(e){
+  if(G.placing || DRAG.it) return;
+  const pt = pointOf(e);
+  const t = tileFromPoint(pt);
+  if(!inRoom(t)) return;
+  const it = itemAt(t.x, t.y);
+  if(!it) return;
+  DRAG.it = it;
+  DRAG.moved = false;
+  DRAG.ok = true;
+  DRAG.from = { x:it.x, y:it.y, dir:it.dir || 0 };
+  DRAG.sx = pt.x; DRAG.sy = pt.y;
+  DRAG.grab = { dx: it.x - t.x, dy: it.y - t.y };   /* saisi par le point cliqué */
+}
+
+function dragMove(e){
+  if(!DRAG.it) return;
+  const pt = pointOf(e);
+  if(!DRAG.moved){
+    if(Math.hypot(pt.x - DRAG.sx, pt.y - DRAG.sy) < 5) return;   /* encore un clic */
+    DRAG.moved = true;
+    cv.style.cursor = 'grabbing';
+  }
+  const t = tileFromPoint(pt);
+  const nx = t.x + DRAG.grab.dx, ny = t.y + DRAG.grab.dy;
+  if(nx === DRAG.it.x && ny === DRAG.it.y) return;
+  DRAG.it.x = nx; DRAG.it.y = ny;
+  DRAG.ok = canPlaceAt(DRAG.it, nx, ny);
+}
+
+function dragRotate(){
+  if(!DRAG.it) return false;
+  DRAG.moved = true;
+  DRAG.it.dir = ((DRAG.it.dir || 0) + 1) % bbDirCount(DRAG.it.cls);
+  DRAG.ok = canPlaceAt(DRAG.it, DRAG.it.x, DRAG.it.y);
+  return true;
+}
+
+function dragEnd(){
+  if(!DRAG.it) return;
+  const it = DRAG.it;
+  if(DRAG.moved){
+    if(DRAG.ok){
+      note(furniLabel(it) + ' déplacé.');
+      save();
+    }else{
+      it.x = DRAG.from.x; it.y = DRAG.from.y; it.dir = DRAG.from.dir;
+      note('Impossible de poser là.','bad');
+    }
+    DRAG.swallow = true;              /* le clic qui suit ne doit pas agir */
+  }
+  DRAG.it = null; DRAG.moved = false;
+  cv.style.cursor = 'default';
+}
+
+/* ---------- souris ---------- */
+/* Le drapeau d'absorption est remis à zéro à chaque nouvelle prise en
+   main : sans cela, un glissé terminé hors du canevas (donc sans clic
+   derrière) avalerait le clic suivant, pourtant légitime. */
+cv.addEventListener('mousedown', e=>{
+  DRAG.swallow = false;
+  if(e.button === 0) dragStart(e);
+});
+window.addEventListener('mousemove', e=>{ if(DRAG.it) dragMove(e); });
+window.addEventListener('mouseup', ()=>dragEnd());
 
 cv.addEventListener('mousemove', e=>{
   const t = tileFromEvent(e);
   G.hover = inRoom(t) ? t : null;
-  cv.style.cursor = G.hover ? 'pointer' : 'default';
+  if(DRAG.it && DRAG.moved) return;
+  cv.style.cursor = !G.hover ? 'default' : (itemAt(t.x, t.y) ? 'move' : 'pointer');
 });
 cv.addEventListener('mouseleave', ()=>{ G.hover = null; });
 
+/* ---------- tactile ---------- */
+cv.addEventListener('touchstart', e=>{
+  DRAG.swallow = false;
+  const t = tileFromEvent(e);
+  G.hover = inRoom(t) ? t : null;
+  dragStart(e);
+}, { passive:true });
+cv.addEventListener('touchmove', e=>{
+  if(!DRAG.it) return;
+  dragMove(e);
+  if(DRAG.moved) e.preventDefault();
+}, { passive:false });
+cv.addEventListener('touchend', ()=>dragEnd());
+cv.addEventListener('touchcancel', ()=>dragEnd());
+
+/* ---------- clic : utiliser un meuble, ou marcher ---------- */
 cv.addEventListener('click', e=>{
+  if(DRAG.swallow){ DRAG.swallow = false; return; }   /* c'était un glissé */
   const t = tileFromEvent(e);
   if(!inRoom(t)) return;
   if(G.placing){ placeHere(t.x, t.y); return; }
@@ -2933,18 +3074,23 @@ cv.addEventListener('click', e=>{
   if(!walkTo(G.me, t.x, t.y)) note('Impossible d’aller là.','bad');
 });
 
+/* ---------- clic droit : tourner ---------- */
 cv.addEventListener('contextmenu', e=>{
   e.preventDefault();
-  if(G.placing){ G.placing.dir = (G.placing.dir + 1) & 3; return; }
+  if(G.placing){
+    G.placing.dir = ((G.placing.dir || 0) + 1) % bbDirCount(G.placing.cls);
+    return;
+  }
+  if(dragRotate()) return;                 /* pivot en cours de déplacement */
   const t = tileFromEvent(e);
   if(!inRoom(t)) return;
   const it = itemAt(t.x, t.y);
   if(!it) return;
   const old = it.dir || 0;
-  it.dir = (old + 1) & 3;
-  const f = footprint(it);
-  if(it.x + f.w > G.room.w || it.y + f.h > G.room.h){
-    it.dir = old; note('Pas la place de tourner.','bad');
+  it.dir = (old + 1) % bbDirCount(it.cls);
+  if(!canPlaceAt(it, it.x, it.y)){
+    it.dir = old;
+    note('Pas la place de tourner.','bad');
   }else save();
 });
 
@@ -2956,6 +3102,13 @@ cv.addEventListener('wheel', e=>{
 
 document.addEventListener('keydown', e=>{
   if(e.key === 'Escape'){
+    if(DRAG.it){                            /* annule le déplacement en cours */
+      DRAG.it.x = DRAG.from.x; DRAG.it.y = DRAG.from.y; DRAG.it.dir = DRAG.from.dir;
+      DRAG.it = null; DRAG.moved = false; DRAG.swallow = true;
+      cv.style.cursor = 'default';
+      note('Déplacement annulé.');
+      return;
+    }
     if(G.placing){ G.placing = null; note('Pose annulée.'); return; }
     $$('.float.open').forEach(w=>w.classList.remove('open'));
     syncToolbar();
@@ -2963,6 +3116,11 @@ document.addEventListener('keydown', e=>{
   }
   const typing = document.activeElement && /input|textarea/i.test(document.activeElement.tagName);
   if(typing) return;
+  if(e.key === 'r' || e.key === 'R'){       /* tourner au clavier */
+    if(dragRotate()){ e.preventDefault(); return; }
+    if(G.placing){ G.placing.dir = ((G.placing.dir || 0) + 1) % bbDirCount(G.placing.cls);
+                   e.preventDefault(); return; }
+  }
   if(e.key === 'Enter'){ $('#chatInput').focus(); e.preventDefault(); return; }
   const turn = { ArrowLeft:-1, ArrowRight:1 }[e.key];
   if(turn != null && G.me){

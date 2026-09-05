@@ -7,7 +7,7 @@ Aucune dépendance, aucun build — il suffit d'ouvrir le fichier dans un naviga
 
 | Élément | Origine |
 |---|---|
-| Avatars | Service d'images d'avatars, détecté parmi bobba.io et les hôtels Habbo |
+| Avatars | Service d'images de **bobba.io**, avec moteur de secours interne |
 | Garde-robe | `figuredata` officiel : 13 types, 1068 jeux de vêtements |
 | Meubles | **Vrais meubles Habbo** via `images.bobba.io` (pipeline bobba_client) |
 | Salle et murs | Dessinés à la volée en isométrique (canvas) |
@@ -56,16 +56,39 @@ dans le catalogue, sans que j'aie à deviner un seul nom de classe.
 
 ## Les avatars
 
-Le service d'images d'avatars n'est pas figé. bobba, Habbo et ses hôtels
-nationaux exposent tous la même signature (`figure`, `direction`,
-`head_direction`, `action`, `gesture`, `size`, `headonly`). Au démarrage le
-client **essaie la liste dans l'ordre et retient le premier qui répond** :
+Les Habbos sont dessinés par le service d'images de **bobba.io**
+(`images.bobba.io/avatarimage.php`). Il est sondé au démarrage : s'il répond,
+tout passe par lui ; sinon le moteur de secours interne prend la main et le
+client reste jouable. Aucun repli vers un autre hôtel.
 
-1. `images.bobba.io/avatarimage.php`
-2. `habbo.com`, puis `habbo.fr`, `habbo.es`, `habbo.com.br`, `habbo.de`
+Une autre adresse peut être imposée depuis le profil (👤) — la signature est
+la même partout : `figure`, `direction`, `head_direction`, `action`,
+`gesture`, `size`, `headonly`.
 
-Tu peux aussi imposer une adresse depuis le profil (👤). Si aucun service ne
-répond, les Habbos sont dessinés par le moteur de secours interne.
+## Déplacer les meubles
+
+Comme dans Habbo, **le clic et le glissé ne font pas la même chose** :
+
+| Geste | Effet |
+|---|---|
+| **Clic** sur un meuble | l'utilise : s'asseoir, s'allonger, allumer, commuter |
+| **Glisser** un meuble | le déplace — il suit le curseur, case par case |
+| **Clic droit** ou **R** | le tourne, y compris en plein déplacement |
+| **Échap** | annule le déplacement en cours |
+| **Maj + clic** | le ramasse dans l'inventaire |
+
+Pendant le glissé, les cases visées s'allument en **vert** si la pose est
+possible, en **rouge** sinon ; au relâchement le meuble revient à sa place si
+c'était rouge. Le meuble est saisi par le point cliqué, donc un canapé de deux
+cases ne saute pas sous le curseur.
+
+L'empreinte **pivote avec le meuble** : une table 2×1 tournée d'un quart de
+tour occupe bien 1×2. Et l'on peut meubler **par-dessus un tapis** : les
+revêtements de sol ne bloquent pas la pose, reconnus non pas à `canstandon`
+(les tables le portent aussi) mais à leur hauteur réelle, lue dans
+`logic.dimensions.z`.
+
+Tout cela marche aussi au doigt sur mobile.
 
 ## Fidélité au client Habbo
 
