@@ -7,46 +7,16 @@ Aucune dépendance, aucun build — il suffit d'ouvrir le fichier dans un naviga
 
 | Élément | Origine |
 |---|---|
-| Avatars | API d'imagerie **officielle Habbo** (`habbo-imaging/avatarimage`) |
+| Avatars | Service d'images d'avatars, détecté parmi bobba.io et les hôtels Habbo |
 | Garde-robe | `figuredata` officiel : 13 types, 1068 jeux de vêtements |
 | Meubles | **Vrais meubles Habbo** via `images.bobba.io` (pipeline bobba_client) |
-| Meubles (repli) | **Sprites pixel art** cuits par le client (43 meubles, 4 orientations) |
 | Salle et murs | Dessinés à la volée en isométrique (canvas) |
 | Mascottes | Sprites du pack fourni (atlas AVIF intégré au HTML) |
 
 ## Les meubles
 
-Les meubles sont des **sprites pixel art cuits par le client** : chaque meuble
-est rastérisé une fois dans un tampon de pixels, sans anticrénelage, avec un
-contour d'1 px, une palette réduite de 5 tons et des plateaux ronds obtenus par
-projection isométrique d'un cercle. Ils sont ensuite affichés au plus proche
-voisin, et le zoom avance par huitièmes pour que le pixel reste net.
-
-Rien n'est téléchargé : aucun CDN, aucun CORS, aucune image manquante.
-43 meubles, 10 teintes chacun, 4 orientations.
-
-### Leurs fonctions
-
-Cliquer un meuble déclenche sa fonction, comme dans Habbo :
-
-| Meuble | Au clic |
-|---|---|
-| Chaises, canapés, tabourets, trône | on marche jusqu'à lui et on **s'assoit**, face au bon côté |
-| Lits | on **s'allonge** |
-| Dé Habbo | il **roule** puis affiche sa face (1 à 6) ; second clic, il se referme |
-| Téléporteur | on entre, on **disparaît**, on ressort par le téléporteur jumeau |
-| Barrière | elle **s'ouvre et se ferme** — fermée, elle bloque vraiment le passage |
-| Lampadaire, néon, télé, borne, juke-box, boule disco | **interrupteur** on / off, la lumière suit |
-| Distributeur | on s'en approche et on **se sert à boire** |
-| Coffre, cadeau | le couvercle **s'ouvre** |
-| Trophée | on **lit l'inscription** |
-| Piste de danse, cheminée, torche, fontaine | animées en continu |
-
-### Les vrais meubles Habbo
-
-Le premier onglet du catalogue charge les **véritables meubles Habbo**. Un
-meuble Habbo n'est pas une image : c'est un atlas de sprites plus un
-descripteur de calques. Le pipeline est porté de
+**Tous les meubles viennent du catalogue Habbo.** Il n'y a plus aucun meuble
+dessiné par le client. Le pipeline est porté de
 [bobba_client](https://github.com/Josedn/bobba_client) (Josedn, GPL) et lit les
 assets miroir de `images.bobba.io` :
 
@@ -56,28 +26,46 @@ assets miroir de `images.bobba.io` :
 <base><nom>/atlas.png     la planche de sprites
 ```
 
-Le client recompose ensuite chaque image : découpe des assets dans l'atlas,
-empilement des calques dans l'ordre, ombre portée, orientation, image
-d'animation, et teinte de la variante de couleur (`chair_basic*2`). L'ancrage
-tombe sur le centre de la case, comme dans Habbo.
+Un meuble Habbo n'est pas une image : le client découpe les assets dans
+l'atlas, empile les calques (ombre portée, puis `a`, `b`, `c`… avec `ink ADD`,
+alpha et miroir par calque), applique la teinte de la variante de couleur
+(`chair_basic*2`) et choisit l'image d'animation. L'ancre tombe sur le centre
+de la case.
 
-Ce que ça apporte : les vraies dimensions au sol, les vrais sièges et lits
-(d'après `cansiton` / `canlayon`), les meubles animés, et les meubles à
-plusieurs états qui **se commutent au clic**.
+On s'assoit et on s'allonge d'après `cansiton` / `canlayon`, les meubles à
+plusieurs états se commutent au clic, et les téléporteurs fonctionnent par
+paire.
 
-Si `images.bobba.io` ne répond pas, le catalogue bascule sur les meubles pixel
-et le dit — rien ne casse.
+## Les salles publiques
 
-> Note : bobba_client est sous GPL. Le pipeline de rendu en est un portage,
-> ce qui place ce fichier sous la même licence si tu le redistribues.
+Les salles ne citent aucun nom de meuble en dur. Chaque emplacement décrit une
+**intention**, résolue à l'exécution contre le vrai furnidata :
 
-### Et les avatars ?
+```js
+S(['chair_norja','chair_basic','chair'], 6,5, 2, {need:'sit'})
+```
 
-Ils viennent de l'**API d'imagerie officielle de Habbo**
-(`habbo.com/habbo-imaging/avatarimage`) — c'est exactement la source
-qu'utilise bobba_client lui aussi. Il n'existe pas, dans bobba, de service
-d'images d'avatars de remplacement : son rendu en salle reconstruit l'avatar
-à partir des planches `gordon`, ce qui est un projet à part entière.
+Le résolveur note les candidats (nom exact, puis préfixe, puis simple
+présence), préfère la variante sans couleur et la bonne taille, et surtout
+**filtre par capacité** : un emplacement `need:'sit'` ne peut tomber que sur un
+meuble où l'on s'assoit réellement. Si aucun mot-clé ne correspond, il prend
+quand même un meuble capable plutôt que de laisser le trou.
+
+Conséquence : les cinq salles se meublent seules avec ce qui existe réellement
+dans le catalogue, sans que j'aie à deviner un seul nom de classe.
+
+## Les avatars
+
+Le service d'images d'avatars n'est pas figé. bobba, Habbo et ses hôtels
+nationaux exposent tous la même signature (`figure`, `direction`,
+`head_direction`, `action`, `gesture`, `size`, `headonly`). Au démarrage le
+client **essaie la liste dans l'ordre et retient le premier qui répond** :
+
+1. `images.bobba.io/avatarimage.php`
+2. `habbo.com`, puis `habbo.fr`, `habbo.es`, `habbo.com.br`, `habbo.de`
+
+Tu peux aussi imposer une adresse depuis le profil (👤). Si aucun service ne
+répond, les Habbos sont dessinés par le moteur de secours interne.
 
 ## Fidélité au client Habbo
 
@@ -87,7 +75,7 @@ d'images d'avatars de remplacement : son rendu en salle reconstruit l'avatar
 - Déplacement au clic avec **cheminement A\*** qui contourne les meubles
   et ne coupe pas les angles.
 - On **s'assoit** sur une chaise et on **s'allonge** sur un lit en cliquant dessus.
-- Meubles **orientables sur 4 côtés** : les volumes tournent réellement.
+- Meubles **orientables** : le clic droit parcourt les orientations du meuble.
 - **Bulles de chat** ancrées au-dessus de la tête, avec la vignette du visage,
   qui remontent à chaque nouveau message.
 - Les Habbos **tournent la tête** vers celui qui parle.
