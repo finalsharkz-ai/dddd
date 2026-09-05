@@ -293,6 +293,28 @@ img{image-rendering:pixelated;-ms-interpolation-mode:nearest-neighbor}
 .part.on{border:2px solid var(--grn-2);background:#fff}
 .part.none{align-items:center;font-size:16px;color:#8098a8}
 
+/* ---------- outil administrateur ---------- */
+#wAdmin>header{background:linear-gradient(180deg,#e8b34a,#b8791a);border-bottom-color:#8a5a10}
+.admSec{margin-bottom:11px;padding:8px;border-radius:6px;background:#eef4f7;border:1px solid #bccdd8}
+.admSec>b{display:block;font-size:11px;color:#8a5a10;margin-bottom:6px;
+  text-transform:uppercase;letter-spacing:.4px}
+.admRow{display:flex;gap:5px;align-items:center;margin-bottom:5px}
+.admRow .inp{height:26px;font-size:11px}
+.admRow .btn{height:26px;padding:0 9px;font-size:11px;white-space:nowrap}
+.admGrid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.admList{max-height:120px;overflow:auto;border-radius:5px;background:#fff;
+  border:1px solid #bccdd8;padding:4px}
+.admList div{display:flex;align-items:center;gap:6px;padding:3px 4px;font-size:11px;
+  border-bottom:1px dashed #dde6ea}
+.admList div:last-child{border-bottom:0}
+.admList b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.admBadge{display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:bold;
+  color:#fff;background:linear-gradient(180deg,#e8b34a,#b8791a);border:1px solid #8a5a10}
+#tbAdmin{color:#ffd76a}
+#dbgBox{position:absolute;left:10px;bottom:96px;z-index:28;padding:6px 9px;border-radius:6px;
+  font:11px/1.5 monospace;color:#cfe4ef;background:rgba(13,20,26,.82);
+  border:1px solid rgba(255,255,255,.12);pointer-events:none;white-space:pre}
+
 /* ---------- profil ---------- */
 .profTop{display:flex;gap:11px}
 .profFig{width:88px;height:118px;flex:0 0 88px;border-radius:7px;
@@ -375,6 +397,7 @@ img{image-rendering:pixelated;-ms-interpolation-mode:nearest-neighbor}
     </div>
 
     <div id="notes"></div>
+    <div id="dbgBox" class="hide"></div>
 
     <!-- ── fenêtres flottantes ── -->
     <div class="win float" id="wNav" style="left:70px;top:70px;width:310px">
@@ -500,6 +523,70 @@ img{image-rendering:pixelated;-ms-interpolation-mode:nearest-neighbor}
       </div>
     </div>
 
+    <div class="win float" id="wAdmin" style="left:120px;top:50px;width:352px">
+      <header><span class="ttl">🛡️ Outil administrateur</span><button class="xbtn" data-close>✕</button></header>
+      <div class="bd" style="max-height:70vh;overflow:auto">
+
+        <div class="admSec">
+          <b>Compte</b>
+          <div class="admRow">
+            <span style="width:56px">Crédits</span>
+            <input id="admCred" class="inp" type="number" min="0">
+            <span style="width:56px">Duckets</span>
+            <input id="admDuck" class="inp" type="number" min="0">
+            <button class="btn sm" id="admMoney">OK</button>
+          </div>
+          <div class="admRow">
+            <input id="admFig" class="inp" placeholder="figure : hd-180-1.ch-210-66…" spellcheck="false">
+            <button class="btn sm" id="admFigGo">Porter</button>
+          </div>
+        </div>
+
+        <div class="admSec">
+          <b>Salle courante</b>
+          <div class="admRow">
+            <input id="admRoomName" class="inp" placeholder="nom de la salle">
+            <button class="btn sm" id="admRename">Renommer</button>
+          </div>
+          <div class="admGrid">
+            <button class="btn sm blue" id="admRefurnish">Remeubler</button>
+            <button class="btn sm red"  id="admClear">Tout vider</button>
+          </div>
+          <div class="admRow" style="margin-top:5px">
+            <select id="admRoomSel" class="inp" style="flex:1"></select>
+            <button class="btn sm" id="admGoRoom">Aller</button>
+          </div>
+        </div>
+
+        <div class="admSec">
+          <b>Donner un meuble</b>
+          <div class="admRow">
+            <input id="admFurniQ" class="inp" placeholder="chercher : chair, bed, teleport…">
+          </div>
+          <div class="admList" id="admFurniList"></div>
+        </div>
+
+        <div class="admSec">
+          <b>Habbos présents</b>
+          <div class="admList" id="admUsers"></div>
+        </div>
+
+        <div class="admSec">
+          <b>Débogage</b>
+          <div class="admGrid">
+            <button class="btn sm grey" id="admDbg">Grille &amp; infos</button>
+            <button class="btn sm grey" id="admCache">Vider les caches</button>
+          </div>
+          <p class="hint" id="admState"></p>
+        </div>
+
+        <div class="admSec" style="background:#fbeceb;border-color:#e0a9a4">
+          <b style="color:#a32c1d">Zone rouge</b>
+          <button class="btn red sm wide" id="admWipe">Effacer la sauvegarde</button>
+        </div>
+      </div>
+    </div>
+
     <div class="win float" id="wPhoto" style="left:180px;top:80px;width:330px">
       <header><span class="ttl">📷 Appareil photo</span><button class="xbtn" data-close>✕</button></header>
       <div class="bd">
@@ -556,6 +643,7 @@ img{image-rendering:pixelated;-ms-interpolation-mode:nearest-neighbor}
       <button class="tbtn" data-win="wRoom" title="Réglages de l'appart">⚙️</button>
       <button class="tbtn" id="tbCam"  title="Appareil photo">📷</button>
       <button class="tbtn" data-win="wHelp" title="Aide">❓</button>
+      <button class="tbtn hide" id="tbAdmin" data-win="wAdmin" title="Outil administrateur">🛡️</button>
       <div class="sep"></div>
       <span class="purse">🪙 <b id="tbCred">0</b></span>
       <span class="purse duck">💠 <b id="tbDuck">0</b></span>
@@ -2202,11 +2290,14 @@ function drawNameTag(gx, cx, cy, c){
   const fs = Math.max(9, Math.round(10*k));
   gx.font = 'bold '+fs+'px Verdana, sans-serif';
   gx.textAlign = 'center'; gx.textBaseline = 'middle';
-  const w = gx.measureText(c.name).width + 12*k, h = fs + 7*k;
-  gx.fillStyle = c.me ? 'rgba(90,137,60,.85)' : 'rgba(16,22,28,.72)';
+  const label = (c.me && typeof isAdmin === 'function' && isAdmin()) ? '🛡 ' + c.name : c.name;
+  const w = gx.measureText(label).width + 12*k, h = fs + 7*k;
+  const staff = c.me && typeof isAdmin === 'function' && isAdmin();
+  gx.fillStyle = staff ? 'rgba(184,121,26,.92)'
+                       : (c.me ? 'rgba(90,137,60,.85)' : 'rgba(16,22,28,.72)');
   roundRect(gx, cx-w/2, cy, w, h, 4*k); gx.fill();
   gx.fillStyle = '#fff';
-  gx.fillText(c.name, cx, cy + h/2 + .5);
+  gx.fillText(staff ? '🛡 ' + c.name : c.name, cx, cy + h/2 + .5);
 }
 function roundRect(gx,x,y,w,h,r){
   gx.beginPath();
@@ -2288,6 +2379,8 @@ function drawScene(t){
   G.chars.forEach(c=>ents.push({ k: c.px+c.py+1, o:2, fn:()=>drawChar(g, c, t) }));
   ents.sort((a,b)=> (a.k - b.k) || (a.o - b.o));
   ents.forEach(e=>e.fn());
+
+  drawDebug();
 }
 /* ══════════════════════════════════════════════════════════
    15. sprites pixel art
@@ -2459,7 +2552,7 @@ const G = {
   me:null, room:null, chars:[],
   hover:null, placing:null,
   cred:150, duck:60, inv:[],
-  roomState:{}, roomBuilt:{}, roomId:'lobby',
+  roomState:{}, roomBuilt:{}, roomId:'lobby', debug:false,
   bubbles:[], badges:['🏅','⭐','🎉']
 };
 
@@ -2770,6 +2863,7 @@ function loop(t){
 
   drawScene(t);
   updateBubbles(t);
+  updateDebugBox();
   if(API.down) warnOffline();
   requestAnimationFrame(loop);
 }
@@ -2789,6 +2883,7 @@ function openWin(id){
   if(id === 'wWard') openWardrobe();
   if(id === 'wProf') renderProfile();
   if(id === 'wRoom') renderRoomSettings();
+  if(id === 'wAdmin') renderAdmin();
   syncToolbar();
 }
 function closeWin(id){
@@ -3536,6 +3631,7 @@ $$('.float').forEach(w=>{
   w.addEventListener('mousedown', ()=>{ w.style.zIndex = ++zTop; });
 });
 $$('#toolbar .tbtn[data-win]').forEach(b=>{ b.onclick = ()=>toggleWin(b.dataset.win); });
+wireAdmin();
 $('#tbMe').onclick  = ()=>toggleWin('wProf');
 $('#tbCam').onclick = takePhoto;
 $('#zIn').onclick   = ()=>{ cam.zoom = snapZoom(cam.zoom + .125); centerCam(); };
@@ -3577,6 +3673,7 @@ $('#pfAvSave').onclick = ()=>{
 };
 $('#pfSave').onclick = ()=>{
   G.me.motto = $('#pfMottoIn').value.trim();
+  syncAdmin();
   renderProfile(); note('Mission mise à jour.','good'); save();
 };
 $('#rsName').oninput = e=>{
@@ -3642,6 +3739,7 @@ function startClient(){
   $('#client').classList.remove('hide');
   refreshHeads();
   updatePurse();
+  syncAdmin();
   resize();
   enterRoom(sv && sv.roomId ? sv.roomId : 'lobby');
   setTimeout(()=>{
@@ -3686,6 +3784,230 @@ function startClient(){
   };
   tick();
 })();
+/* ══════════════════════════════════════════════════════════
+   18. OUTIL ADMINISTRATEUR
+   Réservé au pseudo « sharkz ». Ce client tourne entièrement
+   dans le navigateur, sans serveur : ce verrou évite d'ouvrir
+   l'outil par mégarde, il ne protège rien. Quiconque possède
+   le fichier peut prendre ce pseudo ou l'éditer.
+   ══════════════════════════════════════════════════════════ */
+const ADMIN_NAME = 'sharkz';
+const isAdmin = ()=> !!(G.me && String(G.me.name).trim().toLowerCase() === ADMIN_NAME);
+
+/* affiche ou masque le bouton de la barre d'outils */
+function syncAdmin(){
+  const b = document.getElementById('tbAdmin');
+  if(b) b.classList.toggle('hide', !isAdmin());
+  if(!isAdmin()) closeWin('wAdmin');
+}
+
+function renderAdmin(){
+  if(!isAdmin()){ closeWin('wAdmin'); note('Réservé à l’administrateur.','bad'); return; }
+
+  $('#admCred').value = G.cred;
+  $('#admDuck').value = G.duck;
+  $('#admFig').value  = G.me.figure;
+  $('#admRoomName').value = G.room ? G.room.name : '';
+
+  $('#admRoomSel').innerHTML = ROOMS.map(r=>
+    '<option value="' + esc(r.id) + '"' + (r.id === G.roomId ? ' selected' : '') + '>'
+    + esc(r.name) + '</option>').join('');
+
+  admFurniList();
+  admUserList();
+  admState();
+}
+
+/* ---------- meubles ---------- */
+function admFurniList(){
+  const host = $('#admFurniList');
+  if(BB.state !== 'ok'){
+    host.innerHTML = '<div><b>Catalogue Habbo non chargé.</b></div>';
+    return;
+  }
+  const q = $('#admFurniQ').value.trim().toLowerCase();
+  const arr = (q ? BB.list.filter(f=>f.name.toLowerCase().indexOf(q) >= 0
+                                   || f.cls.toLowerCase().indexOf(q) >= 0)
+                 : BB.list).slice(0, 40);
+  host.innerHTML = arr.map(f=>
+    '<div><b title="' + esc(f.cls) + '">' + esc(f.name) + '</b>'
+    + '<button class="btn sm grey" data-give="' + esc(f.cls) + '">Donner</button>'
+    + '<button class="btn sm" data-drop="' + esc(f.cls) + '">Poser</button></div>').join('')
+    || '<div><b>Aucun meuble ne correspond.</b></div>';
+
+  $$('#admFurniList [data-give]').forEach(b=>{
+    b.onclick = ()=>{ addInv({ cls:b.dataset.give }); save();
+                      note('Ajouté à l’inventaire.','good'); };
+  });
+  $$('#admFurniList [data-drop]').forEach(b=>{
+    b.onclick = ()=>admDrop(b.dataset.drop);
+  });
+}
+
+/* pose un meuble sur la première case libre près du Habbo */
+function admDrop(cls){
+  if(!G.room) return;
+  const probe = { cls, dir:0 };
+  const cx = Math.round(G.me.px), cy = Math.round(G.me.py);
+  for(let r = 0; r <= 6; r++){
+    for(let dy = -r; dy <= r; dy++) for(let dx = -r; dx <= r; dx++){
+      if(Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      const x = cx + dx, y = cy + dy;
+      probe.x = x; probe.y = y;
+      if(canPlaceAt(probe, x, y)){
+        G.room.items.push({ cls, x, y, dir:0, st:0 });
+        save();
+        note((BB.byClass[cls] ? BB.byClass[cls].name : cls) + ' posé en ' + x + ',' + y, 'good');
+        return;
+      }
+    }
+  }
+  note('Aucune case libre à proximité.','bad');
+}
+
+/* ---------- occupants ---------- */
+function admUserList(){
+  const host = $('#admUsers');
+  host.innerHTML = G.chars.map((c,i)=>
+    '<div><b>' + esc(c.name) + (c.me ? ' <span class="admBadge">ADMIN</span>' : '')
+    + '</b><span style="color:#63798a">' + Math.round(c.px) + ',' + Math.round(c.py) + '</span>'
+    + (c.me ? '' : '<button class="btn sm grey" data-tp="' + i + '">Amener</button>'
+                 + '<button class="btn sm grey" data-say="' + i + '">Parler</button>')
+    + '</div>').join('');
+
+  $$('#admUsers [data-tp]').forEach(b=>{
+    b.onclick = ()=>{
+      const c = G.chars[+b.dataset.tp];
+      if(!c) return;
+      const spot = nearestFree(G.room, Math.round(G.me.px), Math.round(G.me.py));
+      if(!spot){ note('Pas de place libre.','bad'); return; }
+      c.x = c.px = spot.x; c.y = c.py = spot.y; c.path = [];
+      note(c.name + ' amené à toi.','good');
+      admUserList();
+    };
+  });
+  $$('#admUsers [data-say]').forEach(b=>{
+    b.onclick = ()=>{
+      const c = G.chars[+b.dataset.say];
+      const t = prompt('Faire dire à ' + c.name + ' :');
+      if(t) say(c, t);
+    };
+  });
+}
+
+/* ---------- débogage ---------- */
+function admState(){
+  const el = $('#admState');
+  if(!el) return;
+  el.textContent =
+      'Catalogue : ' + BB.state + ' (' + BB.count + ' meubles, '
+    + BB.bases.size + ' fiches)\n'
+    + 'Avatars : ' + AVI.state + ' (' + AVI.libs.size + ' bibliothèques)\n'
+    + 'Salle : ' + (G.room ? G.room.items.length : 0) + ' meubles · '
+    + G.chars.length + ' Habbos';
+  el.style.whiteSpace = 'pre';
+}
+
+/* superposition de débogage : grille de collision et repères */
+function drawDebug(){
+  if(!G.debug || !G.room) return;
+  const room = G.room, k = cam.zoom;
+  const walk = blockedGrid(room), occ = occupiedGrid(room);
+  for(let y = 0; y < room.h; y++) for(let x = 0; x < room.w; x++){
+    if(!walk[y][x] && !occ[y][x]) continue;
+    const fill = walk[y][x] ? 'rgba(230,70,60,.30)' : 'rgba(240,180,60,.26)';
+    quad(g, [iso(x,y,1), iso(x+1,y,1), iso(x+1,y+1,1), iso(x,y+1,1)], fill, null);
+  }
+  if(k >= 0.85){
+    g.font = Math.round(8*k) + 'px monospace';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = 'rgba(255,255,255,.45)';
+    for(let y = 0; y < room.h; y++) for(let x = 0; x < room.w; x++){
+      const p = iso(x+.5, y+.5);
+      g.fillText(x + ',' + y, p.x, p.y);
+    }
+  }
+}
+
+let dbgLast = now(), dbgFrames = 0, dbgFps = 0;
+function updateDebugBox(){
+  const box = document.getElementById('dbgBox');
+  if(!box) return;
+  dbgFrames++;
+  const t = now();
+  if(t - dbgLast >= 500){
+    dbgFps = Math.round(dbgFrames * 1000 / (t - dbgLast));
+    dbgFrames = 0; dbgLast = t;
+  }
+  box.classList.toggle('hide', !G.debug);
+  if(!G.debug) return;
+  const h = G.hover ? (G.hover.x + ',' + G.hover.y) : '—';
+  box.textContent =
+      dbgFps + ' i/s · zoom ' + cam.zoom.toFixed(3) + '\n'
+    + 'case ' + h + ' · Habbo ' + Math.round(G.me.px) + ',' + Math.round(G.me.py) + '\n'
+    + 'meubles ' + G.room.items.length + ' · sprites ' + BB.comp.size
+    + ' · avatars ' + AVI.cache.size + '\n'
+    + 'rouge = infranchissable · orange = occupé';
+}
+
+/* ---------- branchements ---------- */
+function wireAdmin(){
+  $('#admMoney').onclick = ()=>{
+    G.cred = Math.max(0, parseInt($('#admCred').value, 10) || 0);
+    G.duck = Math.max(0, parseInt($('#admDuck').value, 10) || 0);
+    updatePurse(); save(); note('Porte-monnaie mis à jour.','good');
+  };
+  $('#admFigGo').onclick = ()=>{
+    const f = $('#admFig').value.trim();
+    if(!f) return;
+    G.me.figure = f;
+    figScale.delete(f);
+    refreshHeads(); save();
+    note('Tenue appliquée.','good');
+  };
+  $('#admRename').onclick = ()=>{
+    const n = $('#admRoomName').value.trim();
+    if(!n || !G.room) return;
+    G.room.name = n;
+    const def = ROOMS.find(r=>r.id === G.roomId);
+    if(def) def.name = n;
+    refreshRoomInfo(); save(); note('Salle renommée.','good');
+  };
+  $('#admRefurnish').onclick = ()=>{
+    const def = ROOMS.find(r=>r.id === G.roomId);
+    if(!def) return;
+    G.roomState[G.roomId] = buildRoomItems(def);
+    G.roomBuilt[G.roomId] = true;
+    G.room.items = G.roomState[G.roomId];
+    save(); renderAdmin();
+    note(G.room.items.length + ' meubles replacés.','good');
+  };
+  $('#admClear').onclick = ()=>{
+    if(!G.room) return;
+    const n = G.room.items.length;
+    G.room.items.length = 0;
+    save(); renderAdmin();
+    note(n + ' meubles retirés.','good');
+  };
+  $('#admGoRoom').onclick = ()=>{
+    const id = $('#admRoomSel').value;
+    if(id && id !== G.roomId){ enterRoom(id); renderAdmin(); }
+  };
+  $('#admFurniQ').oninput = admFurniList;
+  $('#admDbg').onclick = ()=>{
+    G.debug = !G.debug;
+    note('Débogage ' + (G.debug ? 'activé' : 'désactivé'));
+  };
+  $('#admCache').onclick = ()=>{
+    BB.comp.clear(); AVI.cache.clear(); figScale.clear();
+    note('Caches vidés.','good'); admState();
+  };
+  $('#admWipe').onclick = ()=>{
+    if(!confirm('Effacer la sauvegarde et recharger la page ?')) return;
+    try{ localStorage.removeItem(SAVE_KEY); }catch(err){}
+    location.reload();
+  };
+}
 
 </script>
 </body>

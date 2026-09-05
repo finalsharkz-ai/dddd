@@ -144,6 +144,28 @@ sprites était précisément ce blob encodé.
 - Interface Habbo : pièce en plein écran, **fenêtres flottantes déplaçables**,
   barre d'outils en bas, boutons verts, catalogue, inventaire, profil.
 
+## Outil administrateur
+
+Le pseudo **`sharkz`** (à la casse près) fait apparaître un bouton 🛡️ dans la
+barre d'outils. Il ouvre un panneau de maître de jeu :
+
+- **Compte** — fixer les crédits et duckets, appliquer une figure à la main.
+- **Salle** — renommer, tout vider, remeubler depuis le plan, se téléporter
+  dans n'importe quelle salle.
+- **Meubles** — chercher dans le catalogue Habbo, puis *donner* (inventaire)
+  ou *poser* directement sur la première case libre.
+- **Habbos présents** — position de chacun, amener un bot à soi, lui faire
+  dire une phrase.
+- **Débogage** — superposition de la grille (rouge = infranchissable, orange =
+  occupé) et des coordonnées, encart temps réel (images/s, zoom, tailles des
+  caches), état des deux moteurs, vidage des caches.
+- **Zone rouge** — effacer la sauvegarde.
+
+> Ce client tourne entièrement dans le navigateur, sans serveur. Le verrou sur
+> le pseudo évite d'ouvrir l'outil par mégarde, **il ne protège rien** :
+> quiconque possède le fichier peut prendre ce pseudo ou l'éditer. C'est un
+> outil de maître de jeu, pas un contrôle d'accès.
+
 ## Commandes de chat
 
 `:assis` `:debout` `:danse` `:salut` `:rire` `:dodo` `:boire` `:coucher`
