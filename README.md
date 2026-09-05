@@ -11,7 +11,6 @@ Aucune dépendance, aucun build — il suffit d'ouvrir le fichier dans un naviga
 | Garde-robe | `figuredata` officiel : 13 types, 1068 jeux de vêtements |
 | Meubles | **Vrais meubles Habbo** via `images.bobba.io` (pipeline bobba_client) |
 | Salle et murs | Dessinés à la volée en isométrique (canvas) |
-| Mascottes | Sprites du pack fourni (atlas AVIF intégré au HTML) |
 
 ## Les meubles
 
@@ -108,6 +107,27 @@ revêtements de sol ne bloquent pas la pose, reconnus non pas à `canstandon`
 `logic.dimensions.z`.
 
 Tout cela marche aussi au doigt sur mobile.
+
+## Pourquoi le fichier ne déclenche pas d'alerte antivirus
+
+Un fichier HTML dont la majeure partie est une longue chaîne base64, et qui
+fabrique un lien de téléchargement à partir d'une URL `data:`, c'est la
+signature du **HTML smuggling** — une technique qui cache un exécutable dans
+une page web. Les antivirus la signalent, à raison.
+
+Ce client ne fait rien de tel, mais il y ressemblait :
+
+| Avant | Maintenant |
+|---|---|
+| 309 Ko de base64 (61 % du fichier) pour les mascottes | supprimé — le fichier passe de 511 à 192 Ko |
+| photo servie par une URL `data:` dans `<a download>` | photo servie par un objet `Blob` |
+
+Le fichier ne contient ni `eval`, ni `atob`, ni `document.write`, ni
+`new Function`, aucune API Windows et aucune extension exécutable. C'est du
+texte : il se lit dans n'importe quel éditeur.
+
+Contrepartie assumée : **les mascottes ont disparu**, puisque leur planche de
+sprites était précisément ce blob encodé.
 
 ## Fidélité au client Habbo
 
