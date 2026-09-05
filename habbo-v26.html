@@ -229,6 +229,14 @@ img{image-rendering:pixelated;-ms-interpolation-mode:nearest-neighbor}
 .row .tx small{color:#63798a;font-size:10px}
 
 /* ---------- catalogue ---------- */
+.catTop{display:flex;gap:4px;align-items:center;padding:6px;background:var(--win-sub)}
+.catTop .tab{border-radius:5px;cursor:pointer}
+.catTop .inp{flex:1;height:24px;font-size:11px;min-width:60px}
+#catStatus{padding:3px 8px;font-size:10px;color:#4c6377;background:#cfdde6;
+  border-top:1px solid #b0c4d0;border-bottom:1px solid #b0c4d0}
+#catStatus.bad{color:#8d2418}
+#catStatus.good{color:#3d660a}
+.cell img{max-width:52px;max-height:52px;display:block}
 .catWrap{display:flex;height:322px}
 .catNav{width:118px;flex:0 0 118px;overflow:auto;padding:6px;background:var(--win-sub);
   border-right:1px solid #a9bfcc}
@@ -380,6 +388,12 @@ img{image-rendering:pixelated;-ms-interpolation-mode:nearest-neighbor}
 
     <div class="win float" id="wCat" style="left:110px;top:60px;width:404px">
       <header><span class="ttl">🛒 Catalogue</span><button class="xbtn" data-close>✕</button></header>
+      <div class="catTop">
+        <button class="tab on" data-src="real">Meubles Habbo</button>
+        <button class="tab" data-src="draw">Meubles dessinés</button>
+        <input id="catSearch" class="inp" placeholder="Rechercher…">
+      </div>
+      <div id="catStatus">Recherche des meubles officiels…</div>
       <div class="catWrap">
         <div class="catNav" id="catNav"></div>
         <div class="catMain">
@@ -989,8 +1003,19 @@ function rotated(def, dir){
   return { parts, W, H };
 }
 function footprint(it){
+  if(it.cls) return realFoot(it);          /* meuble officiel : dims du furnidata */
   const d = FURNI[it.id];
   return (it.dir & 1) ? { w:d.fh, h:d.fw } : { w:d.fw, h:d.fh };
+}
+/* métadonnées d'un meuble, quelle que soit son origine */
+function furniMeta(it){
+  if(!it) return null;
+  return it.cls ? (RF.byClass[it.cls] || { name:it.cls }) : FURNI[it.id];
+}
+function furniLabel(it){
+  const m = furniMeta(it);
+  if(!m) return 'Meuble';
+  return (m && (m.name || m.n)) || 'Meuble';
 }
 /* orientation que prend un Habbo assis sur ce meuble */
 function seatDir(it){ return (4 + (it.dir & 3) * 2) % 8; }
@@ -1089,12 +1114,19 @@ function gridOf(room, walkable){
   const g = [];
   for(let y=0;y<room.h;y++){ g.push(new Array(room.w).fill(0)); }
   room.items.forEach(it=>{
-    const d = FURNI[it.id];
-    if(!d || !d.solid) return;
-    /* Pour se déplacer, on peut monter sur un siège ou un lit ; pour poser
-       un meuble en revanche, la case compte comme occupée. */
-    if(walkable && (d.sit || d.lay)) return;
-    const f = footprint(it);
+    let f;
+    if(it.cls){
+      const m = RF.byClass[it.cls];
+      /* Pour se déplacer, on peut monter sur un siège ou un lit ; pour poser
+         un meuble en revanche, la case compte comme occupée. */
+      if(walkable && m && (m.sit || m.lay || m.stand)) return;
+      f = realFoot(it);
+    }else{
+      const d = FURNI[it.id];
+      if(!d || !d.solid) return;
+      if(walkable && (d.sit || d.lay)) return;
+      f = footprint(it);
+    }
     for(let y=it.y; y<it.y+f.h; y++)
       for(let x=it.x; x<it.x+f.w; x++)
         if(y>=0 && y<room.h && x>=0 && x<room.w) g[y][x] = 1;
@@ -1162,6 +1194,201 @@ function nearestFree(room, tx, ty, grid){
     }
   }
   return null;
+}
+/* ══════════════════════════════════════════════════════════
+   14. mobilier officiel Habbo
+   Les meubles réels ne sont pas dans le pack : on va les chercher
+   sur les serveurs de Habbo au démarrage.
+     · furnidata  → la liste officielle (nom, classe, révision,
+                    dimensions, « on peut s'y asseoir », catégorie)
+     · _icon.png  → l'illustration officielle du meuble
+   Les URL des CDN de Habbo changent au fil des années : plutôt que
+   d'en figer une, le client essaie plusieurs motifs et retient celui
+   qui répond. Si rien ne répond, on garde les meubles dessinés.
+   ══════════════════════════════════════════════════════════ */
+const RF = {
+  state:'idle',        // idle | loading | ok | fail
+  byClass:{},          // classname -> métadonnées
+  list:[],             // tous les meubles, triés par nom
+  cats:[],             // [[catégorie, nombre], …]
+  pattern:null,        // index du motif d'icône qui fonctionne
+  icons:new Map(),
+  count:0,
+  iconOk:0,            // combien d'icônes officielles ont pu être chargées
+  iconFail:0,
+  note:''
+};
+
+/* la liste officielle des meubles ; plusieurs hôtels, au cas où */
+const FURNIDATA_URLS = [
+  'https://www.habbo.com/gamedata/furnidata_json/1',
+  'https://www.habbo.fr/gamedata/furnidata_json/1',
+  'https://www.habbo.es/gamedata/furnidata_json/1',
+  'https://www.habbo.de/gamedata/furnidata_json/1'
+];
+
+/* motifs d'URL d'icône connus, essayés dans l'ordre */
+const ICON_PATTERNS = [
+  (c,r)=>'https://images.habbo.com/dcr/hof_furni/'+r+'/'+c+'_icon.png',
+  (c,r)=>'https://images.habbo.com/dcr/hof_furni/'+c+'_icon.png',
+  (c,r)=>'https://swfs.habbo.com/dcr/hof_furni/'+r+'/'+c+'_icon.png',
+  (c,r)=>'https://images.habbo.com/dcr/hof_furni/icons/'+c+'_icon.png'
+];
+
+/* le nom de fichier remplace l'étoile des variantes de couleur */
+const iconName = cls => String(cls).replace(/\*/g,'_');
+
+/* Charge une image en essayant plusieurs URL, et pour chacune avec puis
+   sans CORS : l'affichage marche sans CORS, seul l'appareil photo en a
+   besoin. onDone(img, indexDuMotif) ou onDone(null,-1) si tout échoue. */
+function loadImageCascade(urls, onDone){
+  let i = 0;
+  const attempt = ()=>{
+    if(i >= urls.length){ onDone(null, -1); return; }
+    const url = urls[i];
+    const go = (cors)=>{
+      const im = new Image();
+      if(cors) im.crossOrigin = 'anonymous';
+      im.onload  = ()=>onDone(im, i);
+      im.onerror = ()=>{ if(cors) go(false); else { i++; attempt(); } };
+      im.src = url;
+    };
+    go(true);
+  };
+  attempt();
+}
+
+/* icône officielle d'un meuble, chargée à la demande */
+function realIcon(cls){
+  let e = RF.icons.get(cls);
+  if(e) return e;
+  e = { img:null, ready:false, failed:false };
+  RF.icons.set(cls, e);
+  const meta = RF.byClass[cls] || {};
+  const file = iconName(cls);
+  /* si un motif a déjà fait ses preuves, on ne teste que celui-là */
+  const pats = RF.pattern == null ? ICON_PATTERNS : [ICON_PATTERNS[RF.pattern]];
+  const urls = pats.map(p=>p(file, meta.rev || 0));
+  loadImageCascade(urls, (im, idx)=>{
+    if(!im){
+      e.failed = true;
+      RF.iconFail++;
+      /* Aucune icône ne passe : le CDN a bougé ou le navigateur les bloque.
+         On le dit une fois, plutôt que de laisser des vignettes vides. */
+      if(RF.iconOk === 0 && RF.iconFail === 6){
+        RF.note = 'Liste officielle chargée, mais les images des meubles sont '
+                + 'inaccessibles depuis ce navigateur. Essaie « Meubles dessinés ».';
+        if(typeof onRealIconsFailed === 'function') onRealIconsFailed();
+      }
+      return;
+    }
+    e.img = im; e.ready = true;
+    RF.iconOk++;
+    if(RF.pattern == null && idx >= 0) RF.pattern = idx;
+  });
+  return e;
+}
+
+/* ---------- lecture du furnidata ---------- */
+function parseFurnidata(json){
+  const out = [];
+  const grab = section=>{
+    if(!section) return;
+    let arr = section.furnitype || section;
+    if(!Array.isArray(arr)) arr = [arr];
+    arr.forEach(f=>{
+      if(!f || !f.classname) return;
+      const xd = parseInt(f.xdim, 10), yd = parseInt(f.ydim, 10);
+      out.push({
+        cls:  f.classname,
+        name: f.name || f.classname,
+        desc: f.description || '',
+        rev:  f.revision != null ? f.revision : 0,
+        xdim: xd > 0 ? xd : 1,
+        ydim: yd > 0 ? yd : 1,
+        cat:  f.category || 'divers',
+        sit:  !!f.cansiton,
+        lay:  !!f.canlayon,
+        stand:!!f.canstandon
+      });
+    });
+  };
+  grab(json && json.roomitemtypes);      /* seuls les meubles de sol */
+  return out;
+}
+
+function adoptFurnidata(json){
+  const list = parseFurnidata(json);
+  if(!list.length) return false;
+  RF.list = list.sort((a,b)=>a.name.localeCompare(b.name, 'fr'));
+  RF.byClass = {};
+  const tally = {};
+  RF.list.forEach(f=>{
+    RF.byClass[f.cls] = f;
+    tally[f.cat] = (tally[f.cat] || 0) + 1;
+  });
+  RF.cats = Object.keys(tally).sort((a,b)=>tally[b] - tally[a]).map(c=>[c, tally[c]]);
+  RF.count = RF.list.length;
+  RF.state = 'ok';
+  return true;
+}
+
+async function loadRealFurni(){
+  if(RF.state === 'loading' || RF.state === 'ok') return;
+  RF.state = 'loading';
+  for(const url of FURNIDATA_URLS){
+    try{
+      const r = await fetch(url, { mode:'cors', credentials:'omit' });
+      if(!r.ok) continue;
+      const j = await r.json();
+      if(adoptFurnidata(j)){
+        RF.note = RF.count + ' meubles officiels chargés.';
+        if(typeof onRealFurniReady === 'function') onRealFurniReady();
+        return;
+      }
+    }catch(err){ /* hôtel suivant */ }
+  }
+  RF.state = 'fail';
+  RF.note = 'Liste officielle injoignable (réseau ou CORS). '
+          + 'Les meubles dessinés prennent le relais.';
+  if(typeof onRealFurniReady === 'function') onRealFurniReady();
+}
+
+/* ---------- rendu d'un meuble officiel ---------- */
+function realFoot(it){
+  const m = RF.byClass[it.cls];
+  return { w:(m && m.xdim) || 1, h:(m && m.ydim) || 1 };
+}
+
+function drawRealFurni(gx, it, t){
+  const k = cam.zoom;
+  const f = realFoot(it);
+  const c = iso(it.x + f.w/2, it.y + f.h/2);      /* centre de l'empreinte */
+
+  /* ombre au sol : c'est elle qui pose l'objet sur la case */
+  gx.save(); gx.globalAlpha = .22; gx.fillStyle = '#000';
+  gx.beginPath();
+  gx.ellipse(c.x, c.y, (f.w + f.h)*8.5*k, (f.w + f.h)*4.2*k, 0, 0, Math.PI*2);
+  gx.fill(); gx.restore();
+
+  const e = realIcon(it.cls);
+  if(e.ready && e.img.naturalWidth){
+    const w = e.img.naturalWidth*k, h = e.img.naturalHeight*k;
+    gx.imageSmoothingEnabled = false;
+    gx.drawImage(e.img, c.x - w/2, c.y - h + 3*k, w, h);
+  }else{
+    /* en attendant l'icône : une caisse neutre à la bonne empreinte */
+    const m = RF.byClass[it.cls];
+    drawVol(gx, it.x, it.y,
+            { x:.08, y:.08, w:f.w-.16, h:f.h-.16, z:0, zh:26 },
+            e.failed ? '#8a949c' : '#b8c3cb');
+    if(e.failed && m){
+      gx.fillStyle = '#33414c';
+      gx.font = 'bold '+Math.round(8*k)+'px Verdana, sans-serif';
+      gx.textAlign = 'center';
+      gx.fillText(m.name.slice(0,12), c.x, c.y - 30*k);
+    }
+  }
 }
 /* ══════════════════════════════════════════════════════════
    8. rendu de la salle
@@ -1274,6 +1501,7 @@ function leafCluster(gx, cx, cy, base, size, col, t){
 
 /* ---------- un meuble ---------- */
 function drawFurni(gx, it, t){
+  if(it.cls){ drawRealFurni(gx, it, t); return; }   /* meuble officiel Habbo */
   const def = FURNI[it.id]; if(!def) return;
   const r = rotated(def, it.dir);
   const col = it.col || def.base;
@@ -1557,13 +1785,14 @@ function drawScene(t){
   /* aperçu du meuble en cours de pose */
   if(G.placing && G.hover){
     g.save(); g.globalAlpha = .58;
-    drawFurni(g, { id:G.placing.id, x:G.hover.x, y:G.hover.y, dir:G.placing.dir, col:G.placing.col }, t);
+    drawFurni(g, { id:G.placing.id, cls:G.placing.cls, x:G.hover.x, y:G.hover.y,
+                   dir:G.placing.dir, col:G.placing.col }, t);
     g.restore();
   }
 
   const ents = [];
   room.items.forEach(it=>{
-    const d = FURNI[it.id]; if(!d || d.flat) return;
+    if(!it.cls){ const d = FURNI[it.id]; if(!d || d.flat) return; }
     const f = footprint(it);
     ents.push({ k: it.x + f.w/2 + it.y + f.h/2, o:0, fn:()=>drawFurni(g, it, t) });
   });
@@ -1685,12 +1914,14 @@ function walkTo(c, tx, ty, after){
 
 /* s'asseoir / s'allonger sur un meuble */
 function useFurni(c, it){
-  const def = FURNI[it.id];
+  if(!it) return false;
+  const def = furniMeta(it);
   if(!def || (!def.sit && !def.lay)) return false;
   return walkTo(c, it.x, it.y, ()=>{
     c.dir = c.head = seatDir(it);
     if(def.lay){ c.lay = true; c.sit = false; }
-    else { c.sit = true; c.lay = false; c.sitLift = (def.sit - 24); }
+    else { c.sit = true; c.lay = false;
+           c.sitLift = it.cls ? 0 : (def.sit - 24); }
   });
 }
 
@@ -1965,6 +2196,32 @@ function furniThumb(cvs, id, col){
   drawFurni(c2, { id, x:0, y:0, dir:0, col:col||null }, now());
   cam.zoom = sv.zoom; cam.ox = sv.ox; cam.oy = sv.oy;
 }
+/* vignette d'un meuble officiel : l'icône Habbo, dessinée dans la case */
+const THUMB_TRIES = 45;
+function realThumb(cvs, cls, tries){
+  const c2 = cvs.getContext('2d');
+  c2.setTransform(1,0,0,1,0,0);
+  c2.clearRect(0,0,cvs.width,cvs.height);
+  const e = realIcon(cls);
+  if(e.ready && e.img.naturalWidth){
+    const s = Math.min(cvs.width*.94/e.img.naturalWidth,
+                       cvs.height*.94/e.img.naturalHeight, 1.6);
+    const w = e.img.naturalWidth*s, h = e.img.naturalHeight*s;
+    c2.imageSmoothingEnabled = false;
+    c2.drawImage(e.img, (cvs.width-w)/2, (cvs.height-h)/2, w, h);
+  }else if(!e.failed && (tries || 0) < THUMB_TRIES){
+    setTimeout(()=>realThumb(cvs, cls, (tries||0)+1), 230);
+  }else{
+    c2.fillStyle = '#9fb3bf'; c2.font = 'bold 15px Verdana, sans-serif';
+    c2.textAlign = 'center'; c2.fillText('?', cvs.width/2, cvs.height/2+6);
+  }
+}
+/* dessine n'importe quel meuble, officiel ou dessiné */
+function anyThumb(cvs, item){
+  if(item.cls) realThumb(cvs, item.cls, 0);
+  else furniThumb(cvs, item.id, item.col);
+}
+
 function petThumb(cvs, petId){
   const c2 = cvs.getContext('2d');
   c2.setTransform(1,0,0,1,0,0);
@@ -1998,45 +2255,138 @@ function renderNav(){
 }
 
 /* ---------- catalogue ---------- */
-const CAT = { cat:'seat', sel:null, col:null };
-function renderCatalogue(){
-  $('#catNav').innerHTML = FURNI_CATS.map(c=>
-    '<button data-c="'+c[0]+'"'+(c[0] === CAT.cat ? ' class="on"' : '')+'>'+c[1]+'</button>').join('');
-  $$('#catNav button').forEach(b=>{
-    b.onclick = ()=>{ CAT.cat = b.dataset.c; CAT.sel = null; CAT.col = null; renderCatalogue(); };
-  });
+const CAT = { src:'real', cat:'seat', rcat:'*', q:'', sel:null, col:null };
+const REAL_PRICE = 10;
+const REAL_MAX = 240;          /* on n'affiche pas 12 000 vignettes d'un coup */
 
+/* appelé quand le furnidata a répondu (ou définitivement échoué) */
+function onRealFurniReady(){
+  if(RF.state !== 'ok' && CAT.src === 'real') CAT.src = 'draw';
+  if(document.getElementById('wCat').classList.contains('open')) renderCatalogue();
+  else updateCatStatus();
+  note(RF.state === 'ok' ? RF.count + ' meubles Habbo disponibles.' : 'Meubles officiels indisponibles.',
+       RF.state === 'ok' ? 'good' : 'bad');
+}
+function onRealIconsFailed(){
+  updateCatStatus();
+  const el = document.getElementById('catStatus');
+  if(el) el.className = 'bad';
+  note('Images des meubles Habbo inaccessibles.','bad');
+}
+function updateCatStatus(){
+  const el = document.getElementById('catStatus');
+  if(!el) return;
+  const bad = RF.state === 'fail' || (RF.iconOk === 0 && RF.iconFail >= 6);
+  el.className = bad ? 'bad' : (RF.state === 'ok' ? 'good' : '');
+  el.textContent = RF.state === 'loading' ? 'Recherche des meubles officiels…' : RF.note;
+}
+
+/* liste des meubles officiels correspondant au filtre courant */
+function realMatches(){
+  const q = CAT.q.trim().toLowerCase();
+  let arr = RF.list;
+  if(CAT.rcat !== '*') arr = arr.filter(f=>f.cat === CAT.rcat);
+  if(q) arr = arr.filter(f=>f.name.toLowerCase().indexOf(q) >= 0
+                         || f.cls.toLowerCase().indexOf(q) >= 0);
+  return arr;
+}
+
+function renderCatalogue(){
+  updateCatStatus();
+  $$('.catTop .tab').forEach(b=>b.classList.toggle('on', b.dataset.src === CAT.src));
+  $('#catSearch').style.display = CAT.src === 'real' ? '' : 'none';
+
+  /* colonne des catégories */
+  const nav = $('#catNav');
+  if(CAT.src === 'real'){
+    const cats = [['*','Tout le catalogue']].concat(RF.cats.slice(0,18).map(c=>[c[0], c[0]+' ('+c[1]+')']));
+    nav.innerHTML = cats.map(c=>'<button data-rc="'+esc(c[0])+'"'
+      + (c[0] === CAT.rcat ? ' class="on"' : '') + '>' + esc(c[1]) + '</button>').join('');
+    $$('#catNav button').forEach(b=>{
+      b.onclick = ()=>{ CAT.rcat = b.dataset.rc; CAT.sel = null; renderCatalogue(); };
+    });
+  }else{
+    nav.innerHTML = FURNI_CATS.map(c=>'<button data-c="'+c[0]+'"'
+      + (c[0] === CAT.cat ? ' class="on"' : '') + '>' + c[1] + '</button>').join('');
+    $$('#catNav button').forEach(b=>{
+      b.onclick = ()=>{ CAT.cat = b.dataset.c; CAT.sel = null; CAT.col = null; renderCatalogue(); };
+    });
+  }
+
+  /* grille */
   const grid = $('#catGrid');
   grid.innerHTML = '';
-  if(CAT.cat === 'pet'){
+  if(CAT.obs) CAT.obs.disconnect();
+  CAT.obs = new IntersectionObserver(es=>{
+    es.forEach(en=>{
+      if(!en.isIntersecting) return;
+      const c = en.target.querySelector('canvas[data-cls]');
+      if(c){ realThumb(c, c.dataset.cls, 0); c.removeAttribute('data-cls'); }
+      CAT.obs.unobserve(en.target);
+    });
+  }, { root:grid, rootMargin:'220px' });
+
+  const cell = (title, on)=>{
+    const d = document.createElement('div');
+    d.className = 'cell' + (on ? ' on' : '');
+    d.title = title;
+    const c = document.createElement('canvas'); c.width = 52; c.height = 52;
+    d.appendChild(c); grid.appendChild(d);
+    return { d, c };
+  };
+
+  if(CAT.src === 'real'){
+    if(RF.state === 'loading'){
+      grid.innerHTML = '<p class="hint" style="grid-column:1/-1">Chargement du catalogue Habbo…</p>';
+    }else if(RF.state !== 'ok'){
+      grid.innerHTML = '<p class="hint" style="grid-column:1/-1">'
+        + esc(RF.note) + '<br><br>Bascule sur « Meubles dessinés ».</p>';
+    }else{
+      const arr = realMatches();
+      arr.slice(0, REAL_MAX).forEach(f=>{
+        const { d, c } = cell(f.name + ' · ' + f.cls, CAT.sel === 'real:' + f.cls);
+        c.dataset.cls = f.cls;                       /* chargé quand la case est visible */
+        CAT.obs.observe(d);
+        d.onclick = ()=>{ CAT.sel = 'real:' + f.cls; renderCatalogue(); };
+      });
+      if(!arr.length) grid.innerHTML = '<p class="hint" style="grid-column:1/-1">Aucun meuble ne correspond.</p>';
+      else if(arr.length > REAL_MAX){
+        const p = document.createElement('p');
+        p.className = 'hint'; p.style.gridColumn = '1/-1';
+        p.textContent = arr.length + ' meubles trouvés, ' + REAL_MAX + ' affichés — affine ta recherche.';
+        grid.appendChild(p);
+      }
+    }
+  }else if(CAT.cat === 'pet'){
     PETS.forEach(p=>{
-      const d = document.createElement('div');
-      d.className = 'cell' + (CAT.sel === 'pet:'+p[0] ? ' on' : '');
-      d.title = p[1];
-      const c = document.createElement('canvas'); c.width = 52; c.height = 52;
-      d.appendChild(c); grid.appendChild(d);
+      const { d, c } = cell(p[1], CAT.sel === 'pet:' + p[0]);
       petThumb(c, p[0]);
-      d.onclick = ()=>{ CAT.sel = 'pet:'+p[0]; renderCatalogue(); };
+      d.onclick = ()=>{ CAT.sel = 'pet:' + p[0]; renderCatalogue(); };
     });
   }else{
     Object.keys(FURNI).filter(k=>FURNI[k].cat === CAT.cat).forEach(k=>{
-      const d = document.createElement('div');
-      d.className = 'cell' + (CAT.sel === k ? ' on' : '');
-      d.title = FURNI[k].n;
-      const c = document.createElement('canvas'); c.width = 52; c.height = 52;
-      d.appendChild(c); grid.appendChild(d);
+      const { d, c } = cell(FURNI[k].n, CAT.sel === k);
       furniThumb(c, k, CAT.col);
       d.onclick = ()=>{ CAT.sel = k; renderCatalogue(); };
     });
   }
 
+  /* pied : aperçu, description, achat */
   const prev = $('#catPrev'), buy = $('#catBuy');
   const pc = prev.getContext('2d');
   pc.setTransform(1,0,0,1,0,0); pc.clearRect(0,0,prev.width,prev.height);
   if(!CAT.sel){
     $('#catName').textContent = 'Choisis un article';
-    $('#catDesc').textContent = 'Le catalogue Habbo, livré chez toi.';
+    $('#catDesc').textContent = CAT.src === 'real'
+      ? 'Le vrai catalogue de Habbo.' : 'Meubles dessinés par le client.';
     buy.disabled = true;
+  }else if(CAT.sel.startsWith('real:')){
+    const f = RF.byClass[CAT.sel.slice(5)];
+    realThumb(prev, f.cls, 0);
+    $('#catName').textContent = f.name;
+    $('#catDesc').textContent = '🪙 ' + REAL_PRICE + ' crédits · ' + f.xdim + '×' + f.ydim + ' case(s)'
+      + (f.sit ? ' · on peut s’y asseoir' : '') + (f.lay ? ' · on peut s’y allonger' : '');
+    buy.disabled = false;
   }else if(CAT.sel.startsWith('pet:')){
     const p = PETS.find(x=>x[0] === CAT.sel.slice(4));
     petThumb(prev, p[0]);
@@ -2050,24 +2400,30 @@ function renderCatalogue(){
     $('#catDesc').innerHTML = '🪙 ' + def.price + ' crédits · ' + def.fw + '×' + def.fh + ' case(s)'
       + (def.sit ? ' · on peut s’y asseoir' : '') + (def.lay ? ' · on peut s’y allonger' : '');
     buy.disabled = false;
-    /* nuancier du meuble */
     const row = document.createElement('div');
     row.className = 'swatchRow';
     row.style.marginTop = '3px';
     FURNI_TINTS.forEach(t=>{
-      const s = document.createElement('button');
-      s.className = 'sw' + (CAT.col === t ? ' on' : '');
-      s.style.width = '14px'; s.style.height = '14px';
-      s.style.background = t;
-      s.onclick = ()=>{ CAT.col = (CAT.col === t ? null : t); renderCatalogue(); };
-      row.appendChild(s);
+      const sw = document.createElement('button');
+      sw.className = 'sw' + (CAT.col === t ? ' on' : '');
+      sw.style.width = '14px'; sw.style.height = '14px';
+      sw.style.background = t;
+      sw.onclick = ()=>{ CAT.col = (CAT.col === t ? null : t); renderCatalogue(); };
+      row.appendChild(sw);
     });
     $('#catDesc').appendChild(row);
   }
 }
+
 function doBuy(){
   if(!CAT.sel) return;
-  if(CAT.sel.startsWith('pet:')){
+  if(CAT.sel.startsWith('real:')){
+    const f = RF.byClass[CAT.sel.slice(5)];
+    if(G.cred < REAL_PRICE){ note('Pas assez de crédits.','bad'); return; }
+    G.cred -= REAL_PRICE;
+    addInv({ cls:f.cls });
+    note(f.name + ' ajouté à ton inventaire.','good');
+  }else if(CAT.sel.startsWith('pet:')){
     const p = PETS.find(x=>x[0] === CAT.sel.slice(4));
     if(G.cred < PET_PRICE){ note('Pas assez de crédits.','bad'); return; }
     G.cred -= PET_PRICE;
@@ -2081,16 +2437,17 @@ function doBuy(){
     const def = FURNI[CAT.sel];
     if(G.cred < def.price){ note('Pas assez de crédits.','bad'); return; }
     G.cred -= def.price;
-    addInv(CAT.sel, CAT.col);
+    addInv({ id:CAT.sel, col:CAT.col });
     note(def.n + ' ajouté à ton inventaire.','good');
   }
   updatePurse(); save();
 }
-function addInv(id, col){
-  const key = id + '|' + (col || '');
+function addInv(obj){
+  const key = obj.cls ? 'r:' + obj.cls : obj.id + '|' + (obj.col || '');
   const e = G.inv.find(i=>i.key === key);
-  if(e) e.n++;
-  else G.inv.push({ key, id, col:col||null, n:1 });
+  if(e){ e.n++; return; }
+  if(obj.cls) G.inv.push({ key, cls:obj.cls, n:1 });
+  else G.inv.push({ key, id:obj.id, col:obj.col || null, n:1 });
 }
 
 /* ---------- inventaire ---------- */
@@ -2105,13 +2462,13 @@ function renderInventory(){
   G.inv.forEach(i=>{
     const d = document.createElement('div');
     d.className = 'cell' + (INV.sel === i.key ? ' on' : '');
-    d.title = FURNI[i.id] ? FURNI[i.id].n : i.id;
+    d.title = invLabel(i);
     const c = document.createElement('canvas'); c.width = 52; c.height = 52;
     d.appendChild(c);
     const q = document.createElement('span'); q.className = 'q'; q.textContent = '×'+i.n;
     d.appendChild(q);
     grid.appendChild(d);
-    furniThumb(c, i.id, i.col);
+    anyThumb(c, i);
     d.onclick = ()=>{ INV.sel = i.key; renderInventory(); };
   });
   const prev = $('#invPrev');
@@ -2119,8 +2476,8 @@ function renderInventory(){
   pc.setTransform(1,0,0,1,0,0); pc.clearRect(0,0,prev.width,prev.height);
   const it = G.inv.find(i=>i.key === INV.sel);
   if(it){
-    furniThumb(prev, it.id, it.col);
-    $('#invName').textContent = FURNI[it.id].n;
+    anyThumb(prev, it);
+    $('#invName').textContent = invLabel(it);
     $('#invDesc').textContent = 'Tu en as ' + it.n + '. Pose‑le dans la salle.';
     $('#invPlace').disabled = false;
   }else{
@@ -2129,17 +2486,20 @@ function renderInventory(){
     $('#invPlace').disabled = true;
   }
 }
+function invLabel(i){
+  if(i.cls){ const m = RF.byClass[i.cls]; return (m && m.name) || i.cls; }
+  return FURNI[i.id] ? FURNI[i.id].n : i.id;
+}
 function startPlacing(){
   const it = G.inv.find(i=>i.key === INV.sel);
   if(!it) return;
-  G.placing = { key:it.key, id:it.id, col:it.col, dir:0 };
+  G.placing = { key:it.key, id:it.id, cls:it.cls, col:it.col, dir:0 };
   closeWin('wInv');
   note('Clique une case pour poser · clic droit : tourner · Échap : annuler');
 }
 function placeHere(tx, ty){
   const p = G.placing;
-  const def = FURNI[p.id];
-  const f = (p.dir & 1) ? { w:def.fh, h:def.fw } : { w:def.fw, h:def.fh };
+  const f = footprint(p);
   if(tx < 0 || ty < 0 || tx + f.w > G.room.w || ty + f.h > G.room.h){
     note('Ça dépasse de la pièce.','bad'); return;
   }
@@ -2147,19 +2507,22 @@ function placeHere(tx, ty){
   for(let y = ty; y < ty+f.h; y++) for(let x = tx; x < tx+f.w; x++){
     if(grid[y][x]){ note('Il y a déjà un meuble ici.','bad'); return; }
   }
-  G.room.items.push({ id:p.id, x:tx, y:ty, dir:p.dir, col:p.col });
+  const placed = p.cls ? { cls:p.cls, x:tx, y:ty, dir:0 }
+                       : { id:p.id, x:tx, y:ty, dir:p.dir, col:p.col };
+  G.room.items.push(placed);
   const e = G.inv.find(i=>i.key === p.key);
   if(e){ e.n--; if(e.n <= 0) G.inv.splice(G.inv.indexOf(e), 1); }
   G.placing = null;
-  note(def.n + ' posé.','good');
+  note(furniLabel(placed) + ' posé.','good');
   save();
 }
 function pickUp(it){
   const i = G.room.items.indexOf(it);
   if(i < 0) return;
+  const label = furniLabel(it);
   G.room.items.splice(i,1);
-  addInv(it.id, it.col);
-  note(FURNI[it.id].n + ' rangé dans l’inventaire.','good');
+  addInv(it.cls ? { cls:it.cls } : { id:it.id, col:it.col });
+  note(label + ' rangé dans l’inventaire.','good');
   save();
 }
 function itemAt(tx, ty){
@@ -2359,7 +2722,7 @@ cv.addEventListener('click', e=>{
   const it = itemAt(t.x, t.y);
   if(it && e.shiftKey){ pickUp(it); return; }
   if(it){
-    const def = FURNI[it.id];
+    const def = furniMeta(it);
     if(def && (def.sit || def.lay)){ useFurni(G.me, it); return; }
   }
   if(!walkTo(G.me, t.x, t.y)) note('Impossible d’aller là.','bad');
@@ -2372,6 +2735,7 @@ cv.addEventListener('contextmenu', e=>{
   if(!inRoom(t)) return;
   const it = itemAt(t.x, t.y);
   if(!it) return;
+  if(it.cls){ note('Les meubles Habbo n’ont qu’une orientation ici.'); return; }
   const old = it.dir;
   it.dir = (it.dir + 1) & 3;
   const f = footprint(it);
@@ -2444,6 +2808,10 @@ $('#zIn').onclick   = ()=>{ cam.zoom = clamp(cam.zoom*1.15, .45, 2.2); centerCam
 $('#zOut').onclick  = ()=>{ cam.zoom = clamp(cam.zoom*.87, .45, 2.2); centerCam(); };
 $('#zRst').onclick  = ()=>{ cam.zoom = 1; centerCam(); };
 $('#catBuy').onclick   = doBuy;
+$$('.catTop .tab').forEach(b=>{
+  b.onclick = ()=>{ CAT.src = b.dataset.src; CAT.sel = null; renderCatalogue(); };
+});
+$('#catSearch').oninput = e=>{ CAT.q = e.target.value; renderCatalogue(); };
 $('#invPlace').onclick = startPlacing;
 $('#wrSave').onclick   = saveWardrobe;
 $('#wrRand').onclick   = ()=>{ W.fig = figParse(randomFigure(W.gender)); renderWardrobe(); };
@@ -2534,6 +2902,7 @@ function startClient(){
 
 /* ---------- séquence de chargement ---------- */
 (function boot(){
+  loadRealFurni();                       /* les vrais meubles, en tâche de fond */
   const steps = [
     [12,'Chargement des données de figures…'],
     [34,'Préparation du mobilier…'],
