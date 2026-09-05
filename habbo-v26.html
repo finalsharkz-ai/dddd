@@ -632,8 +632,21 @@ function dirFromDelta(dx,dy){
    moteur de secours interne prend la main. Une autre adresse peut être
    imposée depuis le profil (même signature : figure, direction,
    head_direction, action, gesture, size, headonly). */
-const AVATAR_ENDPOINTS = ['https://images.bobba.io/avatarimage.php'];
-const AV = { ep:null, probing:false, custom:null };
+/* bobba.io n'expose aucun service d'images d'avatars : son client
+   reconstruit les Habbos à partir des planches « gordon ». On repasse
+   donc par l'API d'imagerie de Habbo, qui existe à l'identique sur
+   chaque hôtel — si un domaine est bloqué, un autre peut répondre. */
+const AVATAR_ENDPOINTS = [
+  'https://www.habbo.com/habbo-imaging/avatarimage',
+  'https://www.habbo.fr/habbo-imaging/avatarimage',
+  'https://www.habbo.es/habbo-imaging/avatarimage',
+  'https://www.habbo.de/habbo-imaging/avatarimage',
+  'https://www.habbo.it/habbo-imaging/avatarimage',
+  'https://www.habbo.nl/habbo-imaging/avatarimage',
+  'https://www.habbo.com.br/habbo-imaging/avatarimage',
+  'https://www.habbo.com.tr/habbo-imaging/avatarimage'
+];
+const AV = { ep:null, probing:false, custom:null, log:[] };
 function avatarBase(){
   return AV.custom || AVATAR_ENDPOINTS[AV.ep == null ? 0 : AV.ep];
 }
@@ -654,13 +667,18 @@ function probeAvatarEndpoint(){
                 + '&size=s&direction=2&head_direction=2&action=std&gesture=std&img_format=png';
       const im = new Image();
       let done = false;
-      const fail = ()=>{ if(done) return; done = true; i++; tryOne(); };
+      const t0 = now();
+      const fail = (why)=>{ if(done) return; done = true;
+                            AV.log.push({ url:base, ok:false, why:why || 'pas de réponse',
+                                          ms:Math.round(now()-t0) });
+                            i++; tryOne(); };
       const okf  = ()=>{ if(done) return; done = true;
+                         AV.log.push({ url:base, ok:true, ms:Math.round(now()-t0) });
                          if(!AV.custom) AV.ep = i;
                          API.down = false; resolve(base); };
-      im.onload = ()=>{ (im.naturalWidth > 0) ? okf() : fail(); };
-      im.onerror = fail;
-      setTimeout(fail, 6000);            /* un service muet ne bloque pas */
+      im.onload = ()=>{ (im.naturalWidth > 0) ? okf() : fail('image vide'); };
+      im.onerror = ()=>fail('erreur de chargement');
+      setTimeout(()=>fail('délai dépassé'), 6000);   /* un service muet ne bloque pas */
       im.src = url;
     };
     tryOne();
@@ -671,6 +689,7 @@ function probeAvatarEndpoint(){
 function setAvatarEndpoint(url){
   AV.custom = url || null;
   AV.ep = null;
+  AV.log = [];
   imgCache.clear();
   if(typeof figScale !== 'undefined') figScale.clear();
   API.ok = 0; API.fail = 0; API.down = false;
@@ -2871,9 +2890,14 @@ function saveWardrobe(){
 /* ---------- profil ---------- */
 function renderProfile(){
   $('#pfAvIn').value = AV.custom || '';
-  $('#pfAvNote').textContent = API.down
-    ? 'Aucun service ne répond : les Habbos sont dessinés en interne.'
-    : 'Service actif : ' + avatarBase();
+  $('#pfAvNote').innerHTML = (API.down
+    ? '<b>Aucun service ne répond</b> — les Habbos sont dessinés en interne.'
+    : 'Service actif : <b>' + esc(avatarBase()) + '</b>')
+    + (AV.log.length
+        ? '<br><br>Essais :<br>' + AV.log.map(l=>
+            (l.ok ? '✅ ' : '❌ ') + esc(l.url.replace('https://www.','').replace('/habbo-imaging/avatarimage',''))
+            + (l.ok ? '' : ' — ' + esc(l.why)) + ' (' + l.ms + ' ms)').join('<br>')
+        : '');
 
   $('#pfImg').src   = figureUrl({ figure:G.me.figure, dir:2, head:3, size:'l' });
   $('#pfName').textContent  = G.me.name;

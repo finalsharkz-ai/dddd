@@ -7,7 +7,7 @@ Aucune dépendance, aucun build — il suffit d'ouvrir le fichier dans un naviga
 
 | Élément | Origine |
 |---|---|
-| Avatars | Service d'images de **bobba.io**, avec moteur de secours interne |
+| Avatars | API d'imagerie Habbo (hôtel détecté automatiquement), secours interne |
 | Garde-robe | `figuredata` officiel : 13 types, 1068 jeux de vêtements |
 | Meubles | **Vrais meubles Habbo** via `images.bobba.io` (pipeline bobba_client) |
 | Salle et murs | Dessinés à la volée en isométrique (canvas) |
@@ -56,14 +56,22 @@ dans le catalogue, sans que j'aie à deviner un seul nom de classe.
 
 ## Les avatars
 
-Les Habbos sont dessinés par le service d'images de **bobba.io**
-(`images.bobba.io/avatarimage.php`). Il est sondé au démarrage : s'il répond,
-tout passe par lui ; sinon le moteur de secours interne prend la main et le
-client reste jouable. Aucun repli vers un autre hôtel.
+**bobba.io n'expose aucun service d'images d'avatars** : son client reconstruit
+les Habbos côté navigateur à partir des planches `gordon`
+(`map.json`, `figuredata.json`, `partsets.json`, `draworder.json`,
+`animation.json`, puis un atlas par bibliothèque). C'est pour cela que les
+avatars s'y affichent bien.
 
-Une autre adresse peut être imposée depuis le profil (👤) — la signature est
-la même partout : `figure`, `direction`, `head_direction`, `action`,
-`gesture`, `size`, `headonly`.
+En attendant ce portage, les Habbos passent par l'**API d'imagerie de Habbo**,
+qui existe à l'identique sur chaque hôtel. Le client les essaie dans l'ordre au
+démarrage et retient le premier qui répond — si un domaine est bloqué chez toi,
+un autre peut passer :
+
+`habbo.com` · `.fr` · `.es` · `.de` · `.it` · `.nl` · `.com.br` · `.com.tr`
+
+Le profil (👤) affiche le **journal des essais** (✅ / ❌ avec la cause et le
+délai) et permet d'imposer une adresse. Si aucun ne répond, le moteur de
+secours interne dessine les Habbos et le client reste jouable.
 
 ## Déplacer les meubles
 
