@@ -466,7 +466,13 @@ img{image-rendering:pixelated;-ms-interpolation-mode:nearest-neighbor}
         <button class="btn sm wide" id="pfSave">Enregistrer</button>
         <div style="height:10px"></div>
         <div class="fld">
-          <label for="pfAvIn">Service d’images d’avatars</label>
+          <label for="pfGordonIn">Planches d’avatars (moteur local)</label>
+          <input id="pfGordonIn" class="inp" placeholder="images.bobba.io/gordon/…" spellcheck="false">
+        </div>
+        <button class="btn sm wide" id="pfGordonSave">Recharger les planches</button>
+        <div style="height:8px"></div>
+        <div class="fld">
+          <label for="pfAvIn">Service d’images (secours)</label>
           <input id="pfAvIn" class="inp" placeholder="détection automatique" spellcheck="false">
         </div>
         <button class="btn grey sm wide" id="pfAvSave">Utiliser ce service</button>
@@ -747,7 +753,7 @@ function measure(e){
   e.boxed = true;
   if(!API.canRead || !e.cors) return null;
   try{
-    const im = e.img, W = im.naturalWidth, H = im.naturalHeight;
+    const im = e.img, W = im.naturalWidth || im.width, H = im.naturalHeight || im.height;
     if(!W || !H) return null;
     measCv.width = W; measCv.height = H;
     measCx.clearRect(0,0,W,H);
@@ -818,6 +824,13 @@ function paletteFor(type){ return PAL_BY_TYPE[type] || PAL_CLOTH; }
 
 /* Corrige une pastille avec la couleur réellement rendue par Habbo. */
 function refineSwatch(sw, type, setId, colId){
+  /* Si le figuredata officiel est chargé, la couleur exacte s'y lit
+     directement : inutile de la deviner sur une image. */
+  if(typeof AVI !== 'undefined' && AVI.state === 'ok' && AVI.data){
+    const st = AVI.data.settype && AVI.data.settype[type];
+    const c = st && aviColor(st.paletteid, colId);
+    if(c){ sw.style.background = /^#/.test(c) ? c : '#' + c; return; }
+  }
   if(!API.canRead) return;
   const url = figureUrl({
     figure:type+'-'+setId+'-'+colId, size:'s',
@@ -1570,6 +1583,408 @@ function bbMultistate(it){
   return true;
 }
 /* ══════════════════════════════════════════════════════════
+   17. MOTEUR D'AVATARS HABBO
+   Portage de l'AvatarImager de bobba_client (Josedn, GPL).
+   Un Habbo n'est pas une image : c'est une pile de morceaux
+   découpés dans des planches, choisis d'après cinq tables.
+     map.json        quelle bibliothèque contient quelle pièce
+     figuredata.json les jeux de pièces et les palettes
+     partsets.json   les familles de pièces et leurs miroirs
+     draworder.json  l'ordre d'empilement par orientation
+     animation.json  la pièce à prendre selon l'image d'animation
+   puis, par bibliothèque : <lib>/offset.json et <lib>/atlas.png
+   ══════════════════════════════════════════════════════════ */
+const GORDON_BASE = 'https://images.bobba.io/gordon/PRODUCTION-202006192205-424220153/';
+
+const AVI = {
+  base:GORDON_BASE, state:'idle', note:'',
+  map:null, data:null, sets:null, order:null, anim:null,
+  libs:new Map(),          /* nom -> { st, off, atlas } */
+  cache:new Map(),         /* clé -> { cv, box } | null  */
+  cacheMax:240,
+  misses:0
+};
+
+async function loadAvatarEngine(base){
+  if(AVI.state === 'loading' || AVI.state === 'ok') return AVI.state;
+  AVI.base = base || AVI.base;
+  AVI.state = 'loading';
+  const one = n=>fetch(AVI.base + n, { mode:'cors', cache:'default' })
+                 .then(r=>{ if(!r.ok) throw new Error(n + ' HTTP ' + r.status); return r.json(); });
+  try{
+    const [map, data, sets, order, anim] = await Promise.all(
+      ['map.json','figuredata.json','partsets.json','draworder.json','animation.json'].map(one));
+    if(!map || !data || !data.settype || !sets || !sets.activePartSet || !order)
+      throw new Error('tables incomplètes');
+    AVI.map = map; AVI.data = data; AVI.sets = sets; AVI.order = order; AVI.anim = anim || {};
+    AVI.state = 'ok';
+    AVI.note = 'Moteur d’avatars Habbo chargé.';
+  }catch(err){
+    AVI.state = 'fail';
+    AVI.note = 'Planches d’avatars injoignables (' + (err && err.message ? err.message : 'réseau') + ').';
+  }
+  if(typeof onAvatarEngineReady === 'function') onAvatarEngineReady();
+  return AVI.state;
+}
+
+/* ---------- une bibliothèque de pièces ---------- */
+function aviLib(name){
+  let L = AVI.libs.get(name);
+  if(L) return L;
+  L = { st:'load' };
+  AVI.libs.set(name, L);
+  (async ()=>{
+    try{
+      const r = await fetch(AVI.base + name + '/offset.json', { mode:'cors', cache:'default' });
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      const off = await r.json();
+      const img = await bbImage(AVI.base + name + '/atlas.png');
+      L.off = off; L.atlas = img; L.st = 'ok';
+      AVI.cache.clear();                 /* de nouvelles pièces sont disponibles */
+    }catch(err){ L.st = 'fail'; }
+  })();
+  return L;
+}
+
+/* ---------- lecture du figuredata ---------- */
+function aviColor(paletteId, colorId){
+  const p = AVI.data.palette && AVI.data.palette[paletteId];
+  const c = p && p[colorId];
+  return (c && c.color) ? c.color : null;
+}
+/* pièces et couleurs d'un élément de figure, plus les types masqués */
+function aviPartColor(fp){
+  const parts = { hidden:[] };
+  const st = AVI.data.settype[fp.type];
+  if(!st) return parts;
+  const set = st.set && st.set[fp.id];
+  if(set && Array.isArray(set.part)){
+    for(const raw of set.part){
+      const el = { index:raw.index, id:raw.id, colorable:!!raw.colorable, type:raw.type };
+      if(raw.colorable) el.color = aviColor(st.paletteid, fp.colors[(raw.colorindex || 1) - 1]);
+      (parts[raw.type] = parts[raw.type] || []).push(el);
+    }
+  }
+  if(set && Array.isArray(set.hidden)) set.hidden.forEach(t=>parts.hidden.push(t));
+  return parts;
+}
+function aviLibOf(type, partId){
+  const m = AVI.map;
+  let u = m[type] && m[type][partId];
+  if(u == null && type === 'hrb') u = m.hr && m.hr[partId];
+  if(u == null) u = m[type] && m[type][1];
+  if(u == null) u = m[type] && m[type][0];
+  return u == null ? null : u;
+}
+function aviActive(name){
+  const a = AVI.sets.activePartSet[name];
+  return (a && a.activePart) ? a.activePart : [];
+}
+function aviDrawOrder(action, dir){
+  const o = AVI.order[action];
+  const d = o && o[dir];
+  return (d && d.length) ? d : null;
+}
+function aviFrameNumber(type, action, frame){
+  const T = { wav:'Wave', wlk:'Move', spk:'Talk' }[action];
+  if(!T || !AVI.anim[T] || !AVI.anim[T].part) return 0;
+  const seq = AVI.anim[T].part[type];
+  if(!seq || !seq.length) return 0;
+  const e = seq[frame % seq.length];
+  return (e && e.number != null) ? e.number : 0;
+}
+
+/* ---------- description d'une pose (port d'AvatarInfo) ---------- */
+function aviInfo(figure, dir, headDir, actions, gesture, frame, headOnly, scale){
+  const I = { direction:dir, headDirection:headDir, gesture:gesture || 'std', frame:frame || 0,
+              headOnly:!!headOnly, drawOrder:'std', handItem:-1,
+              rectW:64, rectH:110, small:false, act:{ body:'std' } };
+  if(scale === 'l'){ I.rectW = 128; I.rectH = 220; }
+  else if(scale === 's'){ I.rectW = 32; I.rectH = 55; I.small = true; }
+
+  I.figure = [];
+  const seen = {};
+  String(figure || '').split('.').forEach(seg=>{
+    const d = seg.split('-');
+    if(!d[0] || !d[1]) return;
+    const fp = { type:d[0], id:d[1], colors:[d[2]] };
+    if(d[3] != null) fp.colors.push(d[3]);
+    seen[fp.type] = fp;
+  });
+  for(const k in seen) I.figure.push(seen[k]);
+
+  switch(I.gesture){
+    case 'spk': I.act.speak = 'spk'; break;
+    case 'eyb': I.act.eye = 'eyb'; break;
+    case '':    I.act.gesture = 'std'; break;
+    default:    I.act.gesture = I.gesture; break;
+  }
+  for(const value of (actions || ['std'])){
+    const a = String(value).split('=');
+    switch(a[0]){
+      case 'wlk': I.act.wlk = 'wlk'; break;
+      case 'sit': I.act.sit = 'sit'; break;
+      case 'lay': {
+        I.act.body = 'lay'; I.act.eye = 'lay';
+        const t = I.rectW; I.rectW = I.rectH; I.rectH = t;
+        if(I.gesture === 'spk') I.act.speak = 'lsp';
+        else if(I.gesture === 'eyb') I.act.eye = 'ley';
+        else if(I.gesture === 'std') I.act.gesture = 'lay';
+        else I.act.gesture = 'l' + String(I.gesture).substr(0,2);
+        break;
+      }
+      case 'wav': I.act.handLeft = 'wav'; break;
+      case 'crr': case 'drk':
+        I.act.handRight = a[0]; I.act.itemRight = a[0];
+        I.handItem = Number(a[1]); break;
+      case 'swm': I.act.swm = 'swm';
+        if(I.gesture === 'spk') I.act.speak = 'sws'; break;
+      case '':    I.act.body = 'std'; break;
+      default:    I.act.body = a[0]; break;
+    }
+  }
+  if(I.act.sit === 'sit'){
+    if(dir >= 2 && dir <= 4){
+      I.drawOrder = 'sit';
+      if(I.act.handRight === 'drk' && dir >= 2 && dir <= 3) I.drawOrder += '.rh-up';
+      else if(I.act.handLeft && dir === 4) I.drawOrder += '.lh-up';
+    }else if(I.act.body === 'lay') I.drawOrder = 'lay';
+    else if(I.act.handRight === 'drk' && dir >= 0 && dir <= 3) I.drawOrder = 'rh-up';
+    else if(I.act.handLeft && dir >= 4 && dir <= 6) I.drawOrder = 'lh-up';
+  }
+  return I;
+}
+
+/* nom de la ressource d'un morceau, tel qu'il figure dans l'atlas */
+function aviResName(c){
+  return (c.small ? 'sh' : 'h') + '_' + c.resAction + '_' + c.resType + '_'
+       + c.partId + '_' + c.resDir + '_' + c.resFrame;
+}
+/* alias historiques : certaines pièces réutilisent une autre orientation */
+function aviAlias(c){
+  const t = c.type, a = c.action, id = +c.partId, d = c.direction;
+  if(t === 'hd' && c.small) c.partId = 1;
+  if(t === 'ey' && a === 'std' && id === 1 && d === 3) { c.action = c.resAction = 'sml'; }
+  if(t === 'fa' && a === 'std' && id === 2 && (d === 2 || d === 4)) c.resDir = 1;
+  if(t === 'he' && a === 'std' && id === 1 && d === 2) c.resDir = 0;
+  if(t === 'he' && a === 'std' && id === 8) c.resDir = (d % 2 === 0) ? 1 : c.resDir;
+  if(t === 'he' && a === 'std' && (id === 2131 || id === 2132) && d >= 2 && d <= 6) c.resDir = 1;
+  if(t === 'ha' && a === 'std' && id === 2518) c.resDir = (d % 2 === 0) ? 2 : 1;
+  if(t === 'ha' && a === 'std' && id === 2519) c.resDir = (d % 2 === 0) ? 2 : 3;
+  if(t === 'ha' && a === 'std' && id === 2588) c.resDir = 7;
+  if(t === 'ha' && a === 'std' && id === 2589) c.resDir = 3;
+}
+
+/* Une pièce n'existe pas toujours dans l'orientation demandée : Habbo
+   réutilise alors le miroir, une autre image, ou la pose « spk ».
+   Cette cascade est reprise telle quelle de bobba_client. */
+function aviResolve(L, c){
+  const has = ()=>{ const e = L.off && L.off[aviResName(c)]; return !!e && !e.flipped; };
+  if(has()) return true;
+  const ps = AVI.sets.partSet && AVI.sets.partSet[c.type];
+  const flipped = ps ? (ps['flipped-set-type'] || '') : '';
+  if(flipped) c.resType = flipped;
+  if(c.action === 'std' && !has()) c.resAction = 'spk';
+  if(!has()){ c.flip = true; c.resAction = c.action; c.resDir = 6 - c.direction; }
+  if(!has()){ c.resFrame = c.frame + 1; c.flip = false; }
+  if(!has()){
+    c.flip = false; c.resFrame = c.frame; c.resAction = c.action;
+    if(c.direction === 7) c.resDir = 3;
+    if(c.direction === 3) c.resDir = 7;
+  }
+  if(!has()){ c.resFrame = c.frame + 1; c.flip = false; }
+  if(!has()){ c.resAction = c.action; c.resType = flipped; c.resDir = c.direction; }
+  if(c.action === 'std' && !has()){ c.resAction = 'spk'; c.resType = c.type; }
+  return has();
+}
+
+/* teinte une pièce sans lire les pixels (multiply puis alpha d'origine) */
+function aviTint(src, hex){
+  const c = document.createElement('canvas');
+  c.width = src.width; c.height = src.height;
+  const x = c.getContext('2d');
+  x.drawImage(src, 0, 0);
+  x.globalCompositeOperation = 'multiply';
+  x.fillStyle = /^#/.test(hex) ? hex : '#' + hex;
+  x.fillRect(0, 0, c.width, c.height);
+  x.globalCompositeOperation = 'destination-in';
+  x.drawImage(src, 0, 0);
+  return c;
+}
+
+/* ---------- composition ---------- */
+/* Renvoie { cv } quand tout est prêt, null si des planches manquent
+   encore (elles sont alors mises en chargement). */
+function aviCompose(o){
+  if(AVI.state !== 'ok') return null;
+  const key = [o.figure, o.dir, o.head, (o.actions||[]).join(','), o.gesture,
+               o.frame|0, o.headOnly?1:0, o.scale].join('|');
+  if(AVI.cache.has(key)) return AVI.cache.get(key);
+
+  const I = aviInfo(o.figure, o.dir, o.head, o.actions, o.gesture, o.frame, o.headOnly, o.scale);
+  const A = {
+    rect: aviActive(I.headOnly ? 'head' : 'figure'),
+    head: aviActive('head'),       eye: aviActive('eye'),
+    gesture: aviActive('gesture'), speak: aviActive('speak'),
+    walk: aviActive('walk'),       sit: aviActive('sit'),
+    itemRight: aviActive('itemRight'), handRight: aviActive('handRight'),
+    handLeft: aviActive('handLeft'),   swim: aviActive('swim')
+  };
+  const drawParts = aviDrawOrder(I.drawOrder, I.direction) || aviDrawOrder('std', I.direction);
+  if(!drawParts){ AVI.cache.set(key, null); return null; }
+
+  const setParts = {};
+  for(const fp of I.figure){
+    const parts = aviPartColor(fp);
+    for(const t in parts) setParts[t] = (parts[t] || []).concat(setParts[t] || []);
+  }
+  if(I.handItem > 0) setParts.ri = [{ index:0, id:I.handItem }];
+  const hidden = setParts.hidden || [];
+
+  const chunks = [];
+  let pending = false;
+  for(const type of drawParts){
+    const list = setParts[type];
+    if(!list) continue;
+    for(const dp of list){
+      const lib = aviLibOf(type, dp.id);
+      if(lib == null) continue;
+      if(hidden.indexOf(type) >= 0) continue;
+      if(A.rect.indexOf(type) < 0) continue;
+
+      let dir = I.direction, act = null;
+      if(A.rect.indexOf(type) >= 0) act = I.act.body;
+      if(A.head.indexOf(type) >= 0) dir = I.headDirection;
+      if(A.speak.indexOf(type) >= 0 && I.act.speak) act = I.act.speak;
+      if(A.gesture.indexOf(type) >= 0 && I.act.gesture) act = I.act.gesture;
+      let colorable = dp.colorable;
+      if(A.eye.indexOf(type) >= 0){ colorable = false; if(I.act.eye) act = I.act.eye; }
+      if(A.walk.indexOf(type) >= 0 && I.act.wlk) act = I.act.wlk;
+      if(A.sit.indexOf(type) >= 0 && I.act.sit) act = I.act.sit;
+      if(A.handRight.indexOf(type) >= 0 && I.act.handRight) act = I.act.handRight;
+      if(A.itemRight.indexOf(type) >= 0 && I.act.itemRight) act = I.act.itemRight;
+      if(A.handLeft.indexOf(type) >= 0 && I.act.handLeft) act = I.act.handLeft;
+      if(A.swim.indexOf(type) >= 0 && I.act.swm) act = I.act.swm;
+      if(act == null) continue;
+
+      const L = aviLib(lib);
+      if(L.st === 'load'){ pending = true; continue; }
+      if(L.st !== 'ok') continue;
+
+      const c = { lib, type, resType:type, action:act, resAction:act,
+                  partId:dp.id, direction:dir, resDir:dir,
+                  frame:aviFrameNumber(type, act, I.frame), small:I.small,
+                  flip:false, color:(colorable ? dp.color : null) };
+      c.resFrame = c.frame;
+      aviAlias(c);
+      if(!aviResolve(L, c)) continue;
+      chunks.push(c);
+    }
+  }
+  if(pending) return undefined;               /* on réessaiera au prochain rendu */
+  if(!chunks.length){
+    AVI.misses++;
+    AVI.cache.set(key, null);
+    return null;
+  }
+
+  const cv2 = document.createElement('canvas');
+  cv2.width = I.rectW; cv2.height = I.rectH;
+  const cx = cv2.getContext('2d');
+  cx.imageSmoothingEnabled = false;
+
+  for(const c of chunks){
+    const L = AVI.libs.get(c.lib);
+    const meta = L.off[aviResName(c)];
+    const fr = L.off.atlas && L.off.atlas.frames
+             && L.off.atlas.frames[c.lib + '_' + aviResName(c) + '.png'];
+    if(!meta || !fr || !fr.frame) continue;
+    const f = fr.frame;
+
+    const piece = document.createElement('canvas');
+    piece.width = f.w; piece.height = f.h;
+    const pc = piece.getContext('2d');
+    pc.imageSmoothingEnabled = false;
+    pc.drawImage(L.atlas, f.x, f.y, f.w, f.h, 0, 0, f.w, f.h);
+
+    let img = piece;
+    if(c.color) img = aviTint(piece, c.color);
+
+    let px = -meta.x;
+    const py = (I.rectH/2) - meta.y + I.rectH/2.5;
+    if(c.flip){
+      px = -(px + f.w - I.rectW + 1);
+      const fl = document.createElement('canvas');
+      fl.width = f.w; fl.height = f.h;
+      const fc = fl.getContext('2d');
+      fc.imageSmoothingEnabled = false;
+      fc.translate(f.w, 0); fc.scale(-1, 1);
+      fc.drawImage(img, 0, 0);
+      img = fl;
+    }
+    cx.drawImage(img, Math.round(px), Math.round(py));
+  }
+
+  const out = { cv:cv2 };
+  if(AVI.cache.size > AVI.cacheMax) AVI.cache.clear();
+  AVI.cache.set(key, out);
+  return out;
+}
+
+/* ---------- passerelle avec le reste du client ---------- */
+/* Normalise les options : le moteur local et l'API d'imagerie
+   n'attendent pas tout à fait les mêmes noms. */
+function avOpts(o){
+  const a = o.action == null ? 'std' : String(o.action);
+  return {
+    figure:o.figure, dir:o.dir == null ? 2 : o.dir,
+    head:o.head == null ? (o.dir == null ? 2 : o.dir) : o.head,
+    action:a, actions:a.split(','),
+    gesture:o.gesture || 'std',
+    frame:o.frame || 0,
+    size:o.size || 'l', scale:o.size || 'l',
+    headonly:o.headonly ? 1 : 0, headOnly:!!o.headonly
+  };
+}
+
+const aviEntries = new WeakMap();
+function aviWrap(r){
+  let e = aviEntries.get(r);
+  if(!e){
+    e = { img:r.cv, ready:true, failed:false, cors:true, box:null, boxed:false };
+    aviEntries.set(r, e);
+  }
+  return e;
+}
+
+/* Source d'un avatar : le moteur local d'abord, l'API d'imagerie
+   ensuite si cette figure ne passe pas. */
+function avatarEntry(opt){
+  const o = avOpts(opt);
+  if(AVI.state === 'ok'){
+    const r = aviCompose(o);
+    if(r) return aviWrap(r);
+    if(r === undefined) return { img:null, ready:false, failed:false, pending:true };
+  }
+  return getImg(figureUrl(o));
+}
+
+/* Même chose pour une balise <img> de l'interface. */
+function setAvatarImg(el, opt, tries){
+  if(!el) return;
+  const o = avOpts(opt);
+  if(AVI.state === 'ok'){
+    const r = aviCompose(o);
+    if(r){
+      try{ el.src = r.cv.toDataURL(); return; }catch(err){ /* canevas teinté */ }
+    }else if(r === undefined && (tries || 0) < 40){
+      setTimeout(()=>setAvatarImg(el, opt, (tries || 0) + 1), 250);
+      return;
+    }
+  }
+  el.src = figureUrl(o);
+}
+/* ══════════════════════════════════════════════════════════
    8. rendu de la salle
    ══════════════════════════════════════════════════════════ */
 const cv = $('#world');
@@ -1722,12 +2137,15 @@ const mid = (a,b,f)=>({ x:a.x+(b.x-a.x)*f, y:a.y+(b.y-a.y)*f });
 
 /* ---------- Habbos ---------- */
 const figScale = new Map();
+const IW = im => (im && (im.naturalWidth  || im.width))  || 0;
+const IH = im => (im && (im.naturalHeight || im.height)) || 0;
+
 function unitScale(figure){
   if(figScale.has(figure)) return figScale.get(figure);
-  const ref = getImg(figureUrl({ figure, dir:2, head:2, action:'std', gesture:'std', size:'l' }));
-  if(ref.ready && ref.img.naturalHeight){
+  const ref = avatarEntry({ figure, dir:2, head:2, action:'std', gesture:'std', size:'l' });
+  if(ref.ready && IH(ref.img)){
     const b = measure(ref);
-    const u = b ? AVH/b.h : AVH/(ref.img.naturalHeight*.86);
+    const u = b ? AVH/b.h : AVH/(IH(ref.img)*.86);
     figScale.set(figure, u);
     return u;
   }
@@ -1755,20 +2173,20 @@ function drawChar(gx, c, t){
 
   const ps = poseOf(c,t);
   const lift = (ps.lift||0)*k;
-  const e = getImg(figureUrl({ figure:c.figure, dir:c.dir, head:c.head,
-                               action:ps.a, gesture:c.gesture||'std', size:'l' }));
+  const e = avatarEntry({ figure:c.figure, dir:c.dir, head:c.head,
+                          action:ps.a, gesture:c.gesture||'std', size:'l',
+                          frame:Math.floor(t/140) });
   let drew = false;
-  if(e.ready && e.img.naturalWidth){
+  if(e.ready && IW(e.img)){
     let u = unitScale(c.figure);
-    if(u == null) u = AVH/(e.img.naturalHeight*.86);
+    if(u == null) u = AVH/(IH(e.img)*.86);
     const s = u*k;
     const b = measure(e);
     let dx, dy;
     if(b){ dx = p.x - (b.x0 + b.w/2)*s;  dy = p.y - (b.y0 + b.h)*s; }
-    else  { dx = p.x - (e.img.naturalWidth/2)*s; dy = p.y - (e.img.naturalHeight*.97)*s; }
+    else  { dx = p.x - (IW(e.img)/2)*s; dy = p.y - (IH(e.img)*.97)*s; }
     gx.imageSmoothingEnabled = false;
-    gx.drawImage(e.img, dx, dy + lift,
-                 e.img.naturalWidth*s, e.img.naturalHeight*s);
+    gx.drawImage(e.img, dx, dy + lift, IW(e.img)*s, IH(e.img)*s);
     drew = true;
   }
   if(!drew) drawFallbackAvatar(gx, p.x, p.y + lift, c, k);
@@ -2278,8 +2696,8 @@ function bubbleFor(c, text, cls){
   }else{
     const h = document.createElement('div'); h.className = 'h';
     const im = document.createElement('img');
-    im.src = figureUrl({ figure:c.figure, size:'m', headonly:1, dir:2, head:2,
-                         action:'std', gesture:'std' });
+    setAvatarImg(im, { figure:c.figure, size:'m', headonly:1, dir:2, head:2,
+                       action:'std', gesture:'std' });
     h.appendChild(im);
     const tx = document.createElement('span');
     tx.innerHTML = '<b>'+esc(c.name)+'</b> '+esc(text);
@@ -2510,6 +2928,21 @@ function warnOffline(){
   if(offlineWarned || !API.down) return;
   offlineWarned = true;
   note('Service d’avatars injoignable : rendu simplifié.','bad');
+}
+
+/* Le moteur local a répondu (ou non) : on prévient et, s'il a échoué,
+   on se rabat sur l'API d'imagerie. */
+function onAvatarEngineReady(){
+  /* G.me n'existe qu'après l'écran d'entrée : ne rafraîchir les têtes
+     que si un Habbo est déjà en jeu. */
+  const done = ()=>{ if(G.me) refreshHeads(); refreshAvatarUI(); paintLogin(); };
+  if(AVI.state !== 'ok') probeAvatarEndpoint().then(done);
+  else done();
+}
+function refreshAvatarUI(){
+  if(typeof figScale !== 'undefined') figScale.clear();
+  if(document.getElementById('wProf').classList.contains('open')) renderProfile();
+  if(document.getElementById('wWard').classList.contains('open')) renderWardrobe();
 }
 
 function note(msg, kind){
@@ -2802,7 +3235,7 @@ function figWith(type, setId, colId){
   return figBuild(f);
 }
 function renderWardrobe(){
-  $('#wrImg').src = figureUrl({ figure:figNow(), dir:W.dir, head:W.dir, size:'l' });
+  setAvatarImg($('#wrImg'), { figure:figNow(), dir:W.dir, head:W.dir, size:'l' });
   $$('.wrGender button').forEach(b=>b.classList.toggle('on', b.dataset.g === W.gender));
 
   const cats = WARDROBE_CATS.filter(c=>setsFor(c.t, W.gender).length);
@@ -2841,8 +3274,11 @@ function renderWardrobe(){
   W.obs = new IntersectionObserver(es=>{
     es.forEach(en=>{
       if(!en.isIntersecting) return;
-      const im = en.target.querySelector('img[data-src]');
-      if(im){ im.src = im.dataset.src; im.removeAttribute('data-src'); }
+      const im = en.target.querySelector('img[data-fig]');
+      if(im){
+        setAvatarImg(im, JSON.parse(im.dataset.fig));
+        im.removeAttribute('data-fig');
+      }
       W.obs.unobserve(en.target);
     });
   }, { root:box, rootMargin:'160px' });
@@ -2861,7 +3297,7 @@ function renderWardrobe(){
     d.className = 'part' + (W.fig[W.cat] && W.fig[W.cat].set === s.id ? ' on' : '');
     d.title = W.cat + '-' + s.id;
     const im = document.createElement('img');
-    im.dataset.src = figureUrl({
+    im.dataset.fig = JSON.stringify({
       figure: figWith(W.cat, s.id, curCol),
       dir:2, head:2, size:'m', headonly: headish ? 1 : 0
     });
@@ -2890,7 +3326,12 @@ function saveWardrobe(){
 /* ---------- profil ---------- */
 function renderProfile(){
   $('#pfAvIn').value = AV.custom || '';
-  $('#pfAvNote').innerHTML = (API.down
+  $('#pfGordonIn').value = AV.gordon || '';
+  const eng = AVI.state === 'ok'
+    ? '✅ Moteur local : ' + AVI.libs.size + ' bibliothèque(s) de pièces chargée(s)'
+    : (AVI.state === 'loading' ? '⏳ Chargement des planches d’avatars…'
+                               : '❌ ' + esc(AVI.note));
+  $('#pfAvNote').innerHTML = eng + '<br><br>' + (API.down
     ? '<b>Aucun service ne répond</b> — les Habbos sont dessinés en interne.'
     : 'Service actif : <b>' + esc(avatarBase()) + '</b>')
     + (AV.log.length
@@ -2899,7 +3340,7 @@ function renderProfile(){
             + (l.ok ? '' : ' — ' + esc(l.why)) + ' (' + l.ms + ' ms)').join('<br>')
         : '');
 
-  $('#pfImg').src   = figureUrl({ figure:G.me.figure, dir:2, head:3, size:'l' });
+  setAvatarImg($('#pfImg'), { figure:G.me.figure, dir:2, head:3, size:'l' });
   $('#pfName').textContent  = G.me.name;
   $('#pfMotto').textContent = G.me.motto || '—';
   $('#pfCred').textContent  = G.cred;
@@ -2952,9 +3393,9 @@ function takePhoto(){
 
 /* ---------- têtes de l'interface ---------- */
 function refreshHeads(){
-  const u = figureUrl({ figure:G.me.figure, size:'m', headonly:1, dir:2, head:2 });
-  $('#tbMeImg').src = u;
-  $('#chatHeadImg').src = u;
+  const o = { figure:G.me.figure, size:'m', headonly:1, dir:2, head:2 };
+  setAvatarImg($('#tbMeImg'), o);
+  setAvatarImg($('#chatHeadImg'), o);
 }
 function updatePurse(){
   $('#tbCred').textContent = G.cred;
@@ -3208,6 +3649,17 @@ $$('#navTabs .tab').forEach(b=>{
   b.onclick = ()=>{ $$('#navTabs .tab').forEach(x=>x.classList.remove('on'));
                     b.classList.add('on'); renderNav(); };
 });
+$('#pfGordonSave').onclick = ()=>{
+  const v = $('#pfGordonIn').value.trim();
+  AV.gordon = v || null;
+  AVI.state = 'idle'; AVI.libs.clear(); AVI.cache.clear();
+  $('#pfAvNote').textContent = 'Rechargement des planches…';
+  loadAvatarEngine(v || GORDON_BASE).then(st=>{
+    renderProfile();
+    note(st === 'ok' ? 'Moteur d’avatars chargé.' : 'Planches injoignables.',
+         st === 'ok' ? 'good' : 'bad');
+  });
+};
 $('#pfAvSave').onclick = ()=>{
   const v = $('#pfAvIn').value.trim();
   $('#pfAvNote').textContent = 'Recherche…';
@@ -3244,7 +3696,7 @@ window.addEventListener('resize', resize);
 let loginFig = randomFigure('M');
 let loginGender = 'M';
 function paintLogin(){
-  $('#loginImg').src = figureUrl({ figure:loginFig, dir:2, head:3, size:'l' });
+  setAvatarImg($('#loginImg'), { figure:loginFig, dir:2, head:3, size:'l' });
 }
 $('#randFig').onclick = ()=>{
   loginGender = Math.random() < .5 ? 'M' : 'F';
@@ -3295,8 +3747,8 @@ function startClient(){
 
 /* ---------- séquence de chargement ---------- */
 (function boot(){
-  probeAvatarEndpoint();                 /* quel service d'avatars répond ? */
-  loadBobbaFurni();                      /* le catalogue Habbo, en tâche de fond */
+  loadAvatarEngine(AV.gordon || undefined);  /* les Habbos, assemblés en local */
+  loadBobbaFurni();                         /* le catalogue Habbo, en tâche de fond */
   const steps = [
     [12,'Chargement des données de figures…'],
     [34,'Préparation du mobilier…'],

@@ -7,7 +7,7 @@ Aucune dépendance, aucun build — il suffit d'ouvrir le fichier dans un naviga
 
 | Élément | Origine |
 |---|---|
-| Avatars | API d'imagerie Habbo (hôtel détecté automatiquement), secours interne |
+| Avatars | **Assemblés en local** depuis les planches `gordon` (moteur bobba_client) |
 | Garde-robe | `figuredata` officiel : 13 types, 1068 jeux de vêtements |
 | Meubles | **Vrais meubles Habbo** via `images.bobba.io` (pipeline bobba_client) |
 | Salle et murs | Dessinés à la volée en isométrique (canvas) |
@@ -56,22 +56,33 @@ dans le catalogue, sans que j'aie à deviner un seul nom de classe.
 
 ## Les avatars
 
-**bobba.io n'expose aucun service d'images d'avatars** : son client reconstruit
-les Habbos côté navigateur à partir des planches `gordon`
-(`map.json`, `figuredata.json`, `partsets.json`, `draworder.json`,
-`animation.json`, puis un atlas par bibliothèque). C'est pour cela que les
-avatars s'y affichent bien.
+Les Habbos sont **assemblés dans le navigateur**, comme le fait bobba_client.
+Un Habbo n'est pas une image : c'est une pile de morceaux découpés dans des
+planches, choisis d'après cinq tables lues sur `images.bobba.io/gordon/…` :
 
-En attendant ce portage, les Habbos passent par l'**API d'imagerie de Habbo**,
-qui existe à l'identique sur chaque hôtel. Le client les essaie dans l'ordre au
-démarrage et retient le premier qui répond — si un domaine est bloqué chez toi,
-un autre peut passer :
+```
+map.json         quelle bibliothèque contient quelle pièce
+figuredata.json  les jeux de pièces et les palettes de couleurs
+partsets.json    les familles de pièces et leurs miroirs
+draworder.json   l'ordre d'empilement, par orientation
+animation.json   la pièce à prendre selon l'image d'animation
+<lib>/offset.json + <lib>/atlas.png
+```
 
-`habbo.com` · `.fr` · `.es` · `.de` · `.it` · `.nl` · `.com.br` · `.com.tr`
+Le moteur est porté de l'`AvatarImager` de
+[bobba_client](https://github.com/Josedn/bobba_client) (Josedn, GPL), y compris
+sa cascade de repli : quand une pièce n'existe pas dans l'orientation demandée,
+Habbo réutilise le miroir, une autre image, ou la pose « spk ».
 
-Le profil (👤) affiche le **journal des essais** (✅ / ❌ avec la cause et le
-délai) et permet d'imposer une adresse. Si aucun ne répond, le moteur de
-secours interne dessine les Habbos et le client reste jouable.
+Effet de bord agréable : le `figuredata` étant chargé, les pastilles de couleur
+de la garde-robe affichent enfin les **teintes exactes**, lues dans la palette
+au lieu d'être devinées.
+
+**Repli.** Si les planches sont injoignables, le client bascule sur l'API
+d'imagerie de Habbo (8 hôtels essayés, le premier qui répond est retenu), puis
+sur le moteur de secours interne. Le profil (👤) montre l'état des deux
+chaînes et permet de changer l'adresse des planches — l'URL `gordon` contient
+un horodatage de build qui finira par changer.
 
 ## Déplacer les meubles
 
